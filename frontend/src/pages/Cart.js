@@ -83,12 +83,12 @@ export default function Cart() {
                 {subtotal < (settings.free_shipping_above || 2000) && <div className="text-xs text-muted-foreground">Add {formatINR((settings.free_shipping_above || 2000) - subtotal)} more for FREE shipping</div>}
               </div>
               <div className="mt-4">
-                <div className="flex gap-2">
-                  <Input value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} placeholder="Coupon code" data-testid="coupon-input" />
-                  <Button onClick={applyCoupon} variant="outline" data-testid="coupon-apply-button">Apply</Button>
-                </div>
-                {couponMsg && <div className={`text-xs mt-1 ${discount > 0 ? 'text-emerald-600' : 'text-destructive'}`}>{couponMsg}</div>}
-                <div className="text-[10px] text-muted-foreground mt-1">Try: <b>WELCOME10</b> (10% off Rs.500+) or <b>BULK500</b> (Rs.500 off Rs.5000+)</div>
+                <a href="https://wa.me/919044057739?text=Hi%20Kiran%20Traders%2C%20I%20want%20to%20place%20a%20bulk%20order%20and%20check%20discount%20pricing." target="_blank" rel="noreferrer" data-testid="cart-bulk-whatsapp">
+                  <Button variant="outline" className="w-full gap-2 bg-[hsl(var(--brand-teal))] text-white border-[hsl(var(--brand-teal))] hover:bg-[hsl(var(--brand-teal))]/90 hover:text-white">
+                    Bulk order? Get discount on WhatsApp
+                  </Button>
+                </a>
+                <div className="text-[10px] text-muted-foreground mt-2 text-center">Volume pricing on cartons and pallets — chat with our team.</div>
               </div>
               <Button size="lg" className="w-full mt-4 gap-2" onClick={() => navigate('/checkout', { state: { coupon: applied, discount } })} data-testid="proceed-to-checkout">
                 Proceed to Checkout <ArrowRight className="h-4 w-4" />

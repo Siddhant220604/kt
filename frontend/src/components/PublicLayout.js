@@ -37,7 +37,7 @@ const Header = () => {
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
       <div className="bg-primary text-primary-foreground text-xs">
         <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5"><Truck className="h-3.5 w-3.5" /> Free shipping over Rs.2000</span>
+          <span className="flex items-center gap-1.5"><Truck className="h-3.5 w-3.5" /> Bulk order discounts — WhatsApp us</span>
           <span className="hidden sm:flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> {settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</span>
           <a href={`tel:${settings.phone || '+919876543210'}`} className="hidden md:flex items-center gap-1.5 hover:underline"><Phone className="h-3.5 w-3.5" /> {settings.phone || '+91 98765 43210'}</a>
         </div>
