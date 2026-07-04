@@ -75,7 +75,7 @@ const Header = () => {
             <span className="h-10 w-10 rounded-xl bg-primary text-primary-foreground grid place-items-center font-display font-bold">KT</span>
             <div className="leading-tight">
               <div className="font-display font-bold text-lg text-foreground">Kiran Traders</div>
-              <div className="text-[10px] text-muted-foreground hidden sm:block">Since 2004 • Lucknow</div>
+              <div className="text-[10px] text-muted-foreground hidden sm:block">Since 1996 • Lucknow</div>
             </div>
           </Link>
 
@@ -125,7 +125,7 @@ const Footer = () => {
             <span className="h-10 w-10 rounded-xl bg-primary text-primary-foreground grid place-items-center font-display font-bold">KT</span>
             <div className="font-display font-bold text-lg">Kiran Traders</div>
           </div>
-          <p className="text-sm text-muted-foreground">Wholesale & Retail packaging essentials. Trusted in Lucknow since 2004.</p>
+          <p className="text-sm text-muted-foreground">Wholesale & Retail packaging essentials. Trusted in Lucknow since 1996.</p>
           <div className="mt-4 flex items-center gap-2">
             <a href={`https://wa.me/${settings.whatsapp || '919876543210'}`} target="_blank" rel="noreferrer" data-testid="footer-whatsapp" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[hsl(var(--brand-teal))] text-white text-sm"><MessageCircle className="h-4 w-4" /> WhatsApp</a>
             <a href={`tel:${settings.phone || '+919876543210'}`} data-testid="footer-call" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm"><Phone className="h-4 w-4" /> Call</a>

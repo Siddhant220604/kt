@@ -10,7 +10,7 @@ export default function About() {
     <div>
       <div className="hero-radial noise-overlay border-b border-border">
         <Container className="relative z-10 py-14 md:py-20">
-          <Badge className="bg-[hsl(var(--brand-marigold))] text-black mb-4">Since 2004</Badge>
+          <Badge className="bg-[hsl(var(--brand-marigold))] text-black mb-4">Since 1996</Badge>
           <h1 className="text-4xl md:text-5xl font-display font-bold">Kiran Traders — Lucknow's Trusted Wholesale Partner</h1>
           <p className="text-lg text-muted-foreground mt-4 max-w-3xl">
             From a small wholesale shop on Nadan Mahal Road, we've grown by providing quality products, dependable service, and honest pricing to businesses across Uttar Pradesh.
@@ -22,12 +22,10 @@ export default function About() {
           <div className="grid md:grid-cols-2 gap-10 items-start">
             <div>
               <h2 className="text-2xl font-display font-bold">Our Story</h2>
-              <p className="mt-4 text-muted-foreground">Founded in 2004, Kiran Traders started with a simple promise: supply quality disposable and packaging products at wholesale prices, on time, every time. Two decades later, that promise still guides everything we do.</p>
-              <p className="mt-3 text-muted-foreground">Today we serve caterers, halwais, retail shopkeepers, event managers, corporate offices, and small businesses across Lucknow, Kanpur, Sitapur, Barabanki, and beyond.</p>
-              <div className="mt-6 grid grid-cols-3 gap-4">
-                <div className="bg-card border border-border rounded-xl p-4 text-center"><div className="text-3xl font-display font-bold text-[hsl(var(--brand-terracotta))]">20+</div><div className="text-xs text-muted-foreground">Years</div></div>
-                <div className="bg-card border border-border rounded-xl p-4 text-center"><div className="text-3xl font-display font-bold text-[hsl(var(--brand-terracotta))]">10K+</div><div className="text-xs text-muted-foreground">Orders</div></div>
-                <div className="bg-card border border-border rounded-xl p-4 text-center"><div className="text-3xl font-display font-bold text-[hsl(var(--brand-terracotta))]">5.0</div><div className="text-xs text-muted-foreground">Rating</div></div>
+              <p className="mt-4 text-muted-foreground">Founded in 1996, Kiran Traders started with a simple promise: supply quality disposable and packaging products at wholesale prices, on time, every time. Nearly three decades later, that promise still guides everything we do.</p>
+              <p className="mt-3 text-muted-foreground">Today we serve caterers, halwais, retail shopkeepers, event managers, corporate offices, and small businesses across Lucknow. Delivery available within Lucknow only.</p>
+              <div className="mt-6 grid grid-cols-1 gap-4">
+                <div className="bg-card border border-border rounded-xl p-4 text-center"><div className="text-3xl font-display font-bold text-[hsl(var(--brand-terracotta))]">25+</div><div className="text-xs text-muted-foreground">Years in Business</div></div>
               </div>
             </div>
             <div>

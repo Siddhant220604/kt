@@ -793,7 +793,7 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     story = []
     bname = settings.get('business_name', 'Kiran Traders')
     story.append(Paragraph(f'<b>{bname}</b>', h1))
-    story.append(Paragraph(settings.get('tagline', 'Wholesale & Retail Packaging Essentials - Since 2004'), small))
+    story.append(Paragraph(settings.get('tagline', 'Wholesale & Retail Packaging Essentials - Since 1996'), small))
     story.append(Paragraph(settings.get('address', 'Sector K, 805-D, Aashiyana, Lucknow, UP'), small))
     contact_line = ' | '.join(filter(None, [settings.get('phone'), settings.get('email'), settings.get('gstin')]))
     if contact_line:
@@ -869,7 +869,7 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     if order.get('notes'):
         story.append(Paragraph(f"<b>Notes:</b> {order['notes']}", small))
         story.append(Spacer(1, 6))
-    story.append(Paragraph('Thank you for choosing Kiran Traders. Trusted in Lucknow since 2004.', small))
+    story.append(Paragraph('Thank you for choosing Kiran Traders. Trusted in Lucknow since 1996.', small))
     doc.build(story)
     return buf.getvalue()
 
@@ -899,13 +899,13 @@ async def seed_db():
         await db.settings.insert_one({
             'id': 'main',
             'business_name': 'Kiran Traders',
-            'tagline': 'Wholesale & Retail Packaging Essentials - Since 2004',
+            'tagline': 'Wholesale & Retail Packaging Essentials - Since 1996',
             'address': '253/121, Below Jaiswal Dharamshala, Nehru Cross, Nadan Mahal Road, Lucknow \u2013 226004, Uttar Pradesh',
             'landmark': 'Below Jaiswal Dharamshala',
             'phone': '+91 9044057739',
             'phone2': '+91 9044097739',
             'whatsapp': '919044057739',
-            'email': 'sales@kirantraders.com',
+            'email': 'kirantraders@gmail.com',
             'upi_id': upi_id,
             'upi_qr': qr_b64,
             'bank_details': 'Account Name: Kiran Traders\nBank: State Bank of India\nA/C No: 12345678901\nIFSC: SBIN0001234\nBranch: Aashiyana, Lucknow',
@@ -996,7 +996,7 @@ async def seed_db():
     if await db.banners.count_documents({}) == 0:
         banners = [
             {'title': 'Wholesale Prices, Retail Convenience', 'subtitle': 'Thermocol plates, carry bags, packaging materials & more - delivered across Lucknow & UP.', 'cta_text': 'Shop Now', 'link': '/products', 'active': True, 'order': 1, 'image': 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=1400&q=80'},
-            {'title': 'Since 2004 - 20+ Years of Trust', 'subtitle': 'Serving caterers, retailers, and event organizers with quality disposables.', 'cta_text': 'Explore Categories', 'link': '/products', 'active': True, 'order': 2, 'image': 'https://images.unsplash.com/photo-1584743579083-b331c4adbb15?w=1400&q=80'},
+            {'title': 'Since 1996 - Nearly 3 Decades of Trust', 'subtitle': 'Serving caterers, retailers, and event organizers with quality disposables.', 'cta_text': 'Explore Categories', 'link': '/products', 'active': True, 'order': 2, 'image': 'https://images.unsplash.com/photo-1584743579083-b331c4adbb15?w=1400&q=80'},
         ]
         for b in banners:
             b['id'] = str(uuid.uuid4())

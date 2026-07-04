@@ -148,7 +148,7 @@ export default function ProductDetail() {
               <div className="mt-6 grid grid-cols-3 gap-2 text-xs">
                 <div className="flex items-center gap-2 p-3 bg-muted/40 rounded-lg"><ShieldCheck className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />GST Invoice</div>
                 <div className="flex items-center gap-2 p-3 bg-muted/40 rounded-lg"><Truck className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />Fast Dispatch</div>
-                <div className="flex items-center gap-2 p-3 bg-muted/40 rounded-lg"><Award className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />Since 2004</div>
+                <div className="flex items-center gap-2 p-3 bg-muted/40 rounded-lg"><Award className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />Since 1996</div>
               </div>
 
               {/* Specs */}

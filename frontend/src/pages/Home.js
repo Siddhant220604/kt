@@ -56,7 +56,7 @@ export default function Home() {
         <Container className="relative z-10 py-14 md:py-20 grid lg:grid-cols-2 gap-10 items-center">
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
             <div className="flex items-center gap-2 mb-4">
-              <Badge className="bg-[hsl(var(--brand-marigold))] text-black font-semibold">Since 2004</Badge>
+              <Badge className="bg-[hsl(var(--brand-marigold))] text-black font-semibold">Since 1996</Badge>
               <Badge variant="outline" className="gap-1"><ShieldCheck className="h-3.5 w-3.5" />GST Invoice</Badge>
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-display font-bold leading-[1.05] tracking-tight text-foreground">
@@ -64,7 +64,7 @@ export default function Home() {
               <span className="text-[hsl(var(--brand-terracotta))]">Retail Convenience.</span>
             </h1>
             <p className="mt-4 text-base sm:text-lg text-muted-foreground max-w-xl">
-              {hero?.subtitle || 'Thermocol plates, carry bags, disposable glasses, packaging materials and more — delivered across Lucknow & Uttar Pradesh.'}
+              {hero?.subtitle || 'Thermocol plates, carry bags, disposable glasses, packaging materials and more — delivered across Lucknow.'}
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Link to="/products"><Button size="lg" className="gap-2" data-testid="hero-browse-products">Browse Products <ArrowRight className="h-4 w-4" /></Button></Link>
@@ -75,7 +75,7 @@ export default function Home() {
               </a>
             </div>
             <div className="mt-8 flex flex-wrap gap-6 text-sm text-muted-foreground">
-              <div className="flex items-center gap-2"><Award className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />20+ Years of Trust</div>
+              <div className="flex items-center gap-2"><Award className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />25+ Years of Trust</div>
               <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />GST Invoice Available</div>
               <div className="flex items-center gap-2"><Package className="h-4 w-4 text-[hsl(var(--brand-terracotta))]" />Wholesale & Retail</div>
             </div>
@@ -108,10 +108,10 @@ export default function Home() {
         <Container>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-5">
             {[
-              { icon: Package, title: '10K+ Orders', desc: 'Fulfilled across UP' },
-              { icon: Truck, title: 'Fast Delivery', desc: 'Doorstep in Lucknow & UP' },
+              { icon: Truck, title: 'Fast Delivery', desc: 'Doorstep across Lucknow' },
               { icon: Award, title: 'Fast Dispatch', desc: 'Same-day for local orders' },
-              { icon: ShieldCheck, title: '5.0 Rating', desc: 'Trusted by our buyers' },
+              { icon: ShieldCheck, title: 'GST Invoice', desc: 'For all business buyers' },
+              { icon: Phone, title: 'Since 1996', desc: 'Wholesale trust in Lucknow' },
             ].map(({ icon: Icon, title, desc }) => (
               <div key={title} className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-[hsl(var(--brand-terracotta))]/10 grid place-items-center">
@@ -163,10 +163,10 @@ export default function Home() {
       {/* Why choose us */}
       <Section>
         <Container>
-          <SectionTitle eyebrow="Why Kiran Traders" title="Serving Lucknow with pride since 2004" subtitle="Two decades of relationships, quality and reliability." center />
+          <SectionTitle eyebrow="Why Kiran Traders" title="Serving Lucknow with pride since 1996" subtitle="Nearly three decades of relationships, quality and reliability." center />
           <div className="grid md:grid-cols-3 gap-4">
             {[
-              { icon: Award, title: '20+ Years of Trust', desc: 'Established in 2004 by loyal customers across Uttar Pradesh.' },
+              { icon: Award, title: '25+ Years of Trust', desc: 'Established in 1996, serving Lucknow with pride.' },
               { icon: ShieldCheck, title: 'Quality Guaranteed', desc: 'Every product is checked before dispatch. GST-invoiced for businesses.' },
               { icon: Truck, title: 'Fast & Reliable Delivery', desc: 'Same-day dispatch in Lucknow. Pan-India shipping on request.' },
               { icon: Package, title: 'Bulk & Retail Both', desc: 'Small quantities to full-truckload wholesale, all under one roof.' },

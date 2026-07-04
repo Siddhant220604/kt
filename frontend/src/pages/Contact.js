@@ -67,7 +67,7 @@ export default function Contact() {
         <div className="mt-8">
           <div className="font-display font-semibold mb-3">Find us on Google Maps</div>
           <div className="rounded-2xl overflow-hidden border border-border">
-            <iframe title="Kiran Traders Map" src="https://www.google.com/maps?q=Aashiyana%2C+Lucknow%2C+Uttar+Pradesh&output=embed" className="w-full h-72 md:h-96" loading="lazy"></iframe>
+            <iframe title="Kiran Traders Map" src="https://www.google.com/maps?q=Kiran+Traders%2C+Nadan+Mahal+Road%2C+Lucknow%2C+226004&output=embed" className="w-full h-72 md:h-96" loading="lazy"></iframe>
           </div>
         </div>
       </Container>
