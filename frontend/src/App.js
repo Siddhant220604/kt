@@ -1,83 +1,98 @@
-import "@/App.css";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
-import { Toaster } from "sonner";
+import React, { Suspense, lazy } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from './components/ui/sonner';
+import { CartProvider } from './lib/cart';
+import { WishlistProvider } from './lib/wishlist';
+import { ThemeProvider } from './lib/theme';
+import { SettingsProvider } from './lib/settings';
+import PublicLayout from './components/PublicLayout';
+import AdminLayout from './components/AdminLayout';
+import RequireAdmin from './components/RequireAdmin';
+import './App.css';
 
-import { AuthProvider } from "@/context/AuthContext";
-import { CartProvider } from "@/context/CartContext";
-import Navbar from "@/components/Navbar";
-import Footer from "@/components/Footer";
-import CartDrawer from "@/components/CartDrawer";
-import ProtectedRoute from "@/components/ProtectedRoute";
+// Public
+const Home = lazy(() => import('./pages/Home'));
+const About = lazy(() => import('./pages/About'));
+const Products = lazy(() => import('./pages/Products'));
+const ProductDetail = lazy(() => import('./pages/ProductDetail'));
+const Cart = lazy(() => import('./pages/Cart'));
+const Checkout = lazy(() => import('./pages/Checkout'));
+const OrderSuccess = lazy(() => import('./pages/OrderSuccess'));
+const OrderTracking = lazy(() => import('./pages/OrderTracking'));
+const Contact = lazy(() => import('./pages/Contact'));
+const Wishlist = lazy(() => import('./pages/Wishlist'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
-import Home from "@/pages/Home";
-import Catalog from "@/pages/Catalog";
-import ProductDetail from "@/pages/ProductDetail";
-import Login from "@/pages/Login";
-import Register from "@/pages/Register";
-import Checkout from "@/pages/Checkout";
-import Orders from "@/pages/Orders";
-import OrderDetail from "@/pages/OrderDetail";
+// Admin
+const AdminLogin = lazy(() => import('./pages/admin/Login'));
+const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
+const AdminProducts = lazy(() => import('./pages/admin/Products'));
+const AdminOrders = lazy(() => import('./pages/admin/Orders'));
+const AdminOrderDetail = lazy(() => import('./pages/admin/OrderDetail'));
+const AdminCategories = lazy(() => import('./pages/admin/Categories'));
+const AdminCustomers = lazy(() => import('./pages/admin/Customers'));
+const AdminCoupons = lazy(() => import('./pages/admin/Coupons'));
+const AdminBanners = lazy(() => import('./pages/admin/Banners'));
+const AdminReviews = lazy(() => import('./pages/admin/Reviews'));
+const AdminContacts = lazy(() => import('./pages/admin/Contacts'));
+const AdminSettings = lazy(() => import('./pages/admin/Settings'));
 
-import AdminLayout from "@/pages/admin/AdminLayout";
-import AdminDashboard from "@/pages/admin/Dashboard";
-import AdminProducts from "@/pages/admin/Products";
-import AdminCategories from "@/pages/admin/Categories";
-import AdminOrders from "@/pages/admin/Orders";
-import AdminReviews from "@/pages/admin/Reviews";
-
-function Shell() {
-  const location = useLocation();
-  const isAdmin = location.pathname.startsWith("/admin");
-  return (
-    <div className="App flex min-h-screen flex-col">
-      <Navbar />
-      <div className="flex-1">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/catalog" element={<Catalog />} />
-          <Route path="/product/:id" element={<ProductDetail />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route
-            path="/checkout"
-            element={<ProtectedRoute><Checkout /></ProtectedRoute>}
-          />
-          <Route
-            path="/orders"
-            element={<ProtectedRoute><Orders /></ProtectedRoute>}
-          />
-          <Route
-            path="/orders/:id"
-            element={<ProtectedRoute><OrderDetail /></ProtectedRoute>}
-          />
-          <Route
-            path="/admin"
-            element={<ProtectedRoute adminOnly><AdminLayout /></ProtectedRoute>}
-          >
-            <Route index element={<AdminDashboard />} />
-            <Route path="products" element={<AdminProducts />} />
-            <Route path="categories" element={<AdminCategories />} />
-            <Route path="orders" element={<AdminOrders />} />
-            <Route path="reviews" element={<AdminReviews />} />
-          </Route>
-        </Routes>
-      </div>
-      {!isAdmin && <Footer />}
-      <CartDrawer />
-    </div>
-  );
-}
+const Loading = () => (
+  <div className="flex items-center justify-center min-h-[60vh]">
+    <div className="h-10 w-10 rounded-full border-4 border-primary/30 border-t-primary animate-spin" />
+  </div>
+);
 
 function App() {
   return (
-    <AuthProvider>
-      <CartProvider>
-        <BrowserRouter>
-          <Shell />
-          <Toaster position="top-right" richColors closeButton />
-        </BrowserRouter>
-      </CartProvider>
-    </AuthProvider>
+    <div className="App">
+      <ThemeProvider>
+        <SettingsProvider>
+          <CartProvider>
+            <WishlistProvider>
+              <BrowserRouter>
+                <Suspense fallback={<Loading />}>
+                  <Routes>
+                    <Route element={<PublicLayout />}>
+                      <Route path="/" element={<Home />} />
+                      <Route path="/about" element={<About />} />
+                      <Route path="/products" element={<Products />} />
+                      <Route path="/products/:idOrSlug" element={<ProductDetail />} />
+                      <Route path="/cart" element={<Cart />} />
+                      <Route path="/checkout" element={<Checkout />} />
+                      <Route path="/order-success/:orderId" element={<OrderSuccess />} />
+                      <Route path="/track" element={<OrderTracking />} />
+                      <Route path="/track/:orderId" element={<OrderTracking />} />
+                      <Route path="/contact" element={<Contact />} />
+                      <Route path="/wishlist" element={<Wishlist />} />
+                    </Route>
+                    <Route path="/admin/login" element={<AdminLogin />} />
+                    <Route element={<RequireAdmin />}>
+                      <Route element={<AdminLayout />}>
+                        <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+                        <Route path="/admin/dashboard" element={<AdminDashboard />} />
+                        <Route path="/admin/orders" element={<AdminOrders />} />
+                        <Route path="/admin/orders/:oid" element={<AdminOrderDetail />} />
+                        <Route path="/admin/products" element={<AdminProducts />} />
+                        <Route path="/admin/categories" element={<AdminCategories />} />
+                        <Route path="/admin/customers" element={<AdminCustomers />} />
+                        <Route path="/admin/coupons" element={<AdminCoupons />} />
+                        <Route path="/admin/banners" element={<AdminBanners />} />
+                        <Route path="/admin/reviews" element={<AdminReviews />} />
+                        <Route path="/admin/contacts" element={<AdminContacts />} />
+                        <Route path="/admin/settings" element={<AdminSettings />} />
+                      </Route>
+                    </Route>
+                    <Route path="*" element={<NotFound />} />
+                  </Routes>
+                </Suspense>
+              </BrowserRouter>
+              <Toaster position="top-center" richColors closeButton />
+            </WishlistProvider>
+          </CartProvider>
+        </SettingsProvider>
+      </ThemeProvider>
+    </div>
   );
 }
 

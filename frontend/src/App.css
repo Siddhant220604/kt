@@ -1,4 +1,2 @@
-/* App-level overrides */
-.App {
-    min-height: 100vh;
-}
+/* Kiran Traders - minimal global overrides */
+.App { min-height: 100vh; }
