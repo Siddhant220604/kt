@@ -1,0 +1,129 @@
+{
+  "theme": "Light",
+  "archetype": "Archetype 4 (Swiss & High-Contrast) + Archetype 1 (Organic & Earthy)",
+  "design_philosophy": "A high-clarity, industrial-feeling B2B e-commerce platform. It balances the stark, grid-based functionality of Swiss design (essential for complex data tables and bulk ordering) with subtle earthy/kraft-paper tones to represent eco-friendly/wholesale disposable goods. No consumer-flashy elements. Utility, speed, and trust are paramount.",
+  "typography": {
+    "strategy": "Swiss Brutalist (Tech/Business) - Authority and Clarity",
+    "fonts": {
+      "headings": "Outfit",
+      "body": "IBM Plex Sans",
+      "mono": "IBM Plex Mono"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl font-black tracking-tighter text-foreground leading-none",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight text-foreground",
+      "h3": "text-xl font-semibold tracking-tight text-foreground",
+      "h4": "text-lg font-medium text-foreground",
+      "body": "text-base font-normal leading-relaxed text-foreground",
+      "small_labels": "text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground",
+      "data_points": "font-mono text-sm"
+    },
+    "import_instruction": "Add Google Fonts imports for Outfit, IBM Plex Sans, and IBM Plex Mono to index.html."
+  },
+  "colors": {
+    "strategy": "Bone White background, Industrial Charcoal text, and Safety Orange for high-visibility CTAs.",
+    "tailwind_vars": {
+      "--background": "60 11% 98%",
+      "--foreground": "60 4% 11%",
+      "--card": "0 0% 100%",
+      "--card-foreground": "60 4% 11%",
+      "--popover": "0 0% 100%",
+      "--popover-foreground": "60 4% 11%",
+      "--primary": "21 100% 50%",
+      "--primary-foreground": "0 0% 100%",
+      "--secondary": "33 24% 56%",
+      "--secondary-foreground": "0 0% 100%",
+      "--muted": "60 5% 90%",
+      "--muted-foreground": "60 3% 40%",
+      "--accent": "60 5% 90%",
+      "--accent-foreground": "60 4% 11%",
+      "--destructive": "0 84.2% 60.2%",
+      "--destructive-foreground": "0 0% 98%",
+      "--border": "60 5% 85%",
+      "--input": "60 5% 85%",
+      "--ring": "21 100% 50%",
+      "--radius": "0.125rem"
+    },
+    "usage_rules": {
+      "primary": "Use ONLY for critical conversion actions: Add to Cart, Checkout, Login. Do not use for generic links.",
+      "background": "Use standard background for the app. Use pure white (--card) for specific content blocks.",
+      "text": "Never use pure black. The foreground is #1C1C1A.",
+      "hover_states": "Hover states must have an explicit color change. e.g. hover:bg-primary/90."
+    }
+  },
+  "spacing_and_layout": {
+    "grid_system": "The 'Control Room' Grid for the Admin Dashboard and Catalog. Dense, scanable.",
+    "border_radius": "Almost flat. Use rounded-sm (2px) or rounded-none for a crisp, technical look.",
+    "containers": "Grid Borders (Technical Look). Expose the skeleton. Use border-collapse style layouts where possible. For product grids, use border-r border-b border-border on items to create an unbroken grid.",
+    "padding": "Generous spacing. p-6 or p-8 inside cards. py-20 for section breaks on the storefront.",
+    "alignment": "Left-align text, labels, and inputs. Only center for specific hero headers or empty states."
+  },
+  "components": {
+    "buttons": "Shadcn Button. Override radius to rounded-sm. Use 'default' variant for Primary Action (Safety Orange), 'outline' for secondary. Add transition-transform hover:-translate-y-0.5 active:translate-y-0.",
+    "cards": "Shadcn Card. Override with: no shadow (shadow-none), 1px solid border, bg-card, rounded-sm.",
+    "inputs_and_forms": "Shadcn Form/Input/Select. 1px solid border, focus-visible:ring-primary focus-visible:ring-1. No heavy drop shadows.",
+    "tables": "Shadcn Table. Essential for Admin Dashboard and Product Bulk Pricing. Left-align columns. Use monospace font for SKUs and Prices. Use sticky header for long data.",
+    "badges": "Shadcn Badge. Use for MOQ indicators, Statuses (Pending, Shipped). Use outline variant for neutral info, default for highlights.",
+    "bulk_pricing_table": "3-tier layout (e.g., Small Box, Pallet, Container). Columns with checkmarks (Phosphor icons). Emphasize MOQ boldly. Starting price anchor in large typography."
+  },
+  "motion_and_interaction": {
+    "strategy": "Functional and snappy. No long fades.",
+    "hover": "Slight lift on product cards (hover:-translate-y-1 hover:shadow-md hover:border-primary/50 transition-all duration-200).",
+    "feedback": "Use Sonner for toast notifications on 'Add to Cart' and status updates."
+  },
+  "iconography": {
+    "library": "@phosphor-icons/react",
+    "installation": "yarn add @phosphor-icons/react",
+    "style": "Use 'regular' weight for UI elements, 'duotone' for empty states or dashboard hero metrics.",
+    "rules": "Include aria-hidden='true' for decorative icons."
+  },
+  "testing_attributes": {
+    "requirement": "All interactive elements MUST include data-testid.",
+    "examples": [
+      "data-testid='add-to-cart-button'",
+      "data-testid='product-moq-badge'",
+      "data-testid='admin-sidebar-link-orders'",
+      "data-testid='checkout-submit-button'"
+    ]
+  },
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://images.pexels.com/photos/10834810/pexels-photo-10834810.jpeg",
+        "category": "hero_background",
+        "description": "High stacks of cardboard boxes in warehouse. Use with a bg-black/40 overlay for the storefront hero section."
+      },
+      {
+        "url": "https://images.pexels.com/photos/4487383/pexels-photo-4487383.jpeg",
+        "category": "about_or_logistics",
+        "description": "Workers in a spacious warehouse handling packages. Good for an 'About Us' or 'Fulfillment' info section."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1597317292822-d0fa5be43aea",
+        "category": "product_placeholder_1",
+        "description": "Eco-friendly white plastic/biodegradable container on wooden table. Use for product catalog."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1654078054613-a56cfcabdb84",
+        "category": "product_placeholder_2",
+        "description": "Cardboard box with recycles logo. Use for product catalog."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1597974828431-9078248d8cc9",
+        "category": "product_placeholder_3",
+        "description": "Person holding takeout boxes. Use for product lifestyle shots on product detail page."
+      }
+    ],
+    "rules": "No placeholder image services allowed. Only use the provided media. Use object-cover for images."
+  },
+  "instructions_to_main_agent": [
+    "1. Start by defining the Tailwind variables exactly as provided in the 'colors' section into src/index.css.",
+    "2. Add Google Fonts (Outfit, IBM Plex Sans, IBM Plex Mono) to public/index.html.",
+    "3. Set up the Shadcn components (Button, Card, Input, Table, Badge, Dialog) and override their default border radii to '0.125rem' to match the technical, sharp B2B aesthetic.",
+    "4. For the Storefront: Build a hero section with the warehouse image, overlapping the text using a dark overlay (bg-black/50) to ensure text contrast. Use grid-cols-1 md:grid-cols-3 or 4 for the product catalog with visible 1px borders between items.",
+    "5. For the Product Detail Page: Implement a prominent 'Bulk Pricing' table right below the product title, clearly showing Price, MOQ, and Savings.",
+    "6. For the Admin Dashboard: Create a dense, functional sidebar layout. Use Shadcn Tables heavily for Orders and Products. Keep the background light and borders crisp.",
+    "7. Ensure EVERY button, link, and form input has a kebab-case data-testid attribute.",
+    "8. Use @phosphor-icons/react for all icons."
+  ]
+}
