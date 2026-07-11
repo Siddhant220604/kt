@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as ImageIcon, Star, Mail, Settings as SettingsIcon, User, LogOut, Menu, Store, Sun, Moon } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
 import { useTheme } from '../lib/theme';
+import { logoutAdmin, isTokenExpired } from '../lib/api';
 
 const navItems = [
   { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -57,10 +58,44 @@ const AdminLayout = () => {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const { theme, toggle } = useTheme();
+  const timeoutRef = useRef(null);
+
   const logout = () => {
     localStorage.removeItem('kt_admin_token');
     navigate('/admin/login');
   };
+
+  useEffect(() => {
+    const INACTIVITY_TIMEOUT = 30 * 60 * 1000;
+    const clearTimer = () => {
+      if (timeoutRef.current) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+
+    const resetTimer = () => {
+      clearTimer();
+      const token = localStorage.getItem('kt_admin_token');
+      if (!token || isTokenExpired(token)) {
+        logoutAdmin('Your session has expired. Please login again.');
+        return;
+      }
+      timeoutRef.current = window.setTimeout(() => {
+        logoutAdmin('Logged out due to inactivity. Please sign in again.');
+      }, INACTIVITY_TIMEOUT);
+    };
+
+    const events = ['mousemove', 'keydown', 'scroll', 'touchstart'];
+    events.forEach((eventName) => window.addEventListener(eventName, resetTimer, { passive: true }));
+    resetTimer();
+
+    return () => {
+      clearTimer();
+      events.forEach((eventName) => window.removeEventListener(eventName, resetTimer));
+    };
+  }, []);
+
   return (
     <div className="min-h-screen flex bg-muted/30">
       <aside className="hidden lg:flex w-64 border-r border-border bg-card flex-col">

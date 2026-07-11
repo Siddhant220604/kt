@@ -13,14 +13,25 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
 
   const submit = async (e) => {
-    e.preventDefault(); setLoading(true);
+    e.preventDefault();
+    const email = form.email.trim().toLowerCase();
+    const password = form.password;
+    if (!email || !password) {
+      toast.error('Enter a valid email and password');
+      return;
+    }
+    setLoading(true);
     try {
-      const { data } = await api.post('/auth/login', form);
+      const { data } = await api.post('/auth/login', { email, password });
       localStorage.setItem('kt_admin_token', data.token);
       toast.success('Welcome back!');
       nav('/admin/dashboard');
-    } catch (e) { toast.error(e.response?.data?.detail || 'Login failed'); }
-    finally { setLoading(false); }
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      toast.error(detail || 'Invalid email or password');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

@@ -352,17 +352,18 @@ async def get_category(cat_id: str):
     return c
 
 @api_router.post('/categories')
-async def create_category(cat: CategoryIn, _: Dict = Depends(require_admin)):
+async def create_category(cat: CategoryIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = cat.model_dump()
     doc['id'] = str(uuid.uuid4())
     doc['slug'] = doc.get('slug') or slugify(cat.name)
     doc['created_at'] = now_iso()
     await db.categories.insert_one(doc)
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_category', doc['id'], {'name': doc.get('name')})
     doc.pop('_id', None)
     return doc
 
 @api_router.put('/categories/{cat_id}')
-async def update_category(cat_id: str, cat: CategoryIn, _: Dict = Depends(require_admin)):
+async def update_category(cat_id: str, cat: CategoryIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = cat.model_dump()
     if not doc.get('slug'):
         doc['slug'] = slugify(cat.name)
@@ -371,11 +372,13 @@ async def update_category(cat_id: str, cat: CategoryIn, _: Dict = Depends(requir
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail='Category not found')
     updated = await db.categories.find_one({'id': cat_id}, {'_id': 0})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_category', cat_id, {'name': doc.get('name')})
     return updated
 
 @api_router.delete('/categories/{cat_id}')
-async def delete_category(cat_id: str, _: Dict = Depends(require_admin)):
+async def delete_category(cat_id: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.categories.delete_one({'id': cat_id})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_category', cat_id)
     return {'ok': True}
 
 # ------------------ PRODUCTS ------------------
@@ -437,7 +440,7 @@ async def get_product(pid: str):
     return p
 
 @api_router.post('/products')
-async def create_product(pr: ProductIn, _: Dict = Depends(require_admin)):
+async def create_product(pr: ProductIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = pr.model_dump()
     doc['id'] = str(uuid.uuid4())
     doc['slug'] = doc.get('slug') or slugify(pr.name)
@@ -445,11 +448,12 @@ async def create_product(pr: ProductIn, _: Dict = Depends(require_admin)):
     doc['avg_rating'] = 0.0
     doc['review_count'] = 0
     await db.products.insert_one(doc)
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_product', doc['id'], {'name': doc.get('name')})
     doc.pop('_id', None)
     return doc
 
 @api_router.put('/products/{pid}')
-async def update_product(pid: str, pr: ProductIn, _: Dict = Depends(require_admin)):
+async def update_product(pid: str, pr: ProductIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = pr.model_dump()
     if not doc.get('slug'):
         doc['slug'] = slugify(pr.name)
@@ -458,11 +462,13 @@ async def update_product(pid: str, pr: ProductIn, _: Dict = Depends(require_admi
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail='Product not found')
     p = await db.products.find_one({'id': pid}, {'_id': 0})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_product', pid, {'name': doc.get('name')})
     return p
 
 @api_router.delete('/products/{pid}')
-async def delete_product(pid: str, _: Dict = Depends(require_admin)):
+async def delete_product(pid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.products.delete_one({'id': pid})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_product', pid)
     return {'ok': True}
 
 # ------------------ COUPONS ------------------
@@ -478,7 +484,7 @@ async def public_coupons():
     return docs
 
 @api_router.post('/coupons')
-async def create_coupon(c: CouponIn, _: Dict = Depends(require_admin)):
+async def create_coupon(c: CouponIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = c.model_dump()
     doc['id'] = str(uuid.uuid4())
     doc['code'] = c.code.upper()
@@ -487,22 +493,26 @@ async def create_coupon(c: CouponIn, _: Dict = Depends(require_admin)):
     if await db.coupons.find_one({'code': doc['code']}):
         raise HTTPException(status_code=400, detail='Coupon code exists')
     await db.coupons.insert_one(doc)
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_coupon', doc['id'], {'code': doc.get('code')})
     doc.pop('_id', None)
     return doc
 
 @api_router.put('/coupons/{cid}')
-async def update_coupon(cid: str, c: CouponIn, _: Dict = Depends(require_admin)):
+async def update_coupon(cid: str, c: CouponIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = c.model_dump()
     doc['code'] = c.code.upper()
     doc['updated_at'] = now_iso()
     res = await db.coupons.update_one({'id': cid}, {'$set': doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail='Coupon not found')
-    return await db.coupons.find_one({'id': cid}, {'_id': 0})
+    coupon = await db.coupons.find_one({'id': cid}, {'_id': 0})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_coupon', cid, {'code': doc.get('code')})
+    return coupon
 
 @api_router.delete('/coupons/{cid}')
-async def delete_coupon(cid: str, _: Dict = Depends(require_admin)):
+async def delete_coupon(cid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.coupons.delete_one({'id': cid})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_coupon', cid)
     return {'ok': True}
 
 @api_router.post('/coupons/validate')
@@ -753,7 +763,7 @@ async def get_order(oid: str, _: Dict = Depends(require_admin)):
     return o
 
 @api_router.put('/orders/{oid}/status')
-async def update_order_status(oid: str, upd: OrderStatusUpdate, _: Dict = Depends(require_admin)):
+async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, payload: Dict = Depends(require_admin)):
     valid = ['pending', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled']
     if upd.status not in valid:
         raise HTTPException(status_code=400, detail='Invalid status')
@@ -763,6 +773,7 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, _: Dict = Depend
     hist = o.get('status_history', [])
     hist.append({'status': upd.status, 'at': now_iso(), 'note': upd.tracking_note or ''})
     await db.orders.update_one({'id': oid}, {'$set': {'status': upd.status, 'status_history': hist, 'updated_at': now_iso()}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_order_status', oid, {'status': upd.status})
     return await db.orders.find_one({'id': oid}, {'_id': 0})
 
 @api_router.get('/orders/{oid}/invoice')
@@ -815,26 +826,30 @@ async def all_banners(_: Dict = Depends(require_admin)):
     return docs
 
 @api_router.post('/banners')
-async def create_banner(b: BannerIn, _: Dict = Depends(require_admin)):
+async def create_banner(b: BannerIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = b.model_dump()
     doc['id'] = str(uuid.uuid4())
     doc['created_at'] = now_iso()
     await db.banners.insert_one(doc)
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_banner', doc['id'], {'title': doc.get('title')})
     doc.pop('_id', None)
     return doc
 
 @api_router.put('/banners/{bid}')
-async def update_banner(bid: str, b: BannerIn, _: Dict = Depends(require_admin)):
+async def update_banner(bid: str, b: BannerIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = b.model_dump()
     doc['updated_at'] = now_iso()
     res = await db.banners.update_one({'id': bid}, {'$set': doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail='Banner not found')
-    return await db.banners.find_one({'id': bid}, {'_id': 0})
+    banner = await db.banners.find_one({'id': bid}, {'_id': 0})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_banner', bid, {'title': doc.get('title')})
+    return banner
 
 @api_router.delete('/banners/{bid}')
-async def delete_banner(bid: str, _: Dict = Depends(require_admin)):
+async def delete_banner(bid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.banners.delete_one({'id': bid})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_banner', bid)
     return {'ok': True}
 
 # ------------------ REVIEWS ------------------
@@ -863,7 +878,7 @@ async def all_reviews(approved: Optional[bool] = None, _: Dict = Depends(require
     return docs
 
 @api_router.put('/reviews/{rid}/approve')
-async def approve_review(rid: str, _: Dict = Depends(require_admin)):
+async def approve_review(rid: str, request: Request, payload: Dict = Depends(require_admin)):
     r = await db.reviews.find_one({'id': rid}, {'_id': 0})
     if not r:
         raise HTTPException(status_code=404, detail='Review not found')
@@ -875,11 +890,13 @@ async def approve_review(rid: str, _: Dict = Depends(require_admin)):
     ratings = [a['rating'] for a in approved]
     avg = sum(ratings) / len(ratings) if ratings else 0
     await db.products.update_one({'id': pid}, {'$set': {'avg_rating': round(avg, 2), 'review_count': len(ratings)}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'approve_review', rid, {'product_id': pid})
     return {'ok': True}
 
 @api_router.delete('/reviews/{rid}')
-async def delete_review(rid: str, _: Dict = Depends(require_admin)):
+async def delete_review(rid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.reviews.delete_one({'id': rid})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_review', rid)
     return {'ok': True}
 
 # ------------------ CONTACTS ------------------
@@ -1139,13 +1156,15 @@ async def list_contacts(_: Dict = Depends(require_admin)):
     return docs
 
 @api_router.put('/contact/{cid}/read')
-async def mark_contact_read(cid: str, _: Dict = Depends(require_admin)):
+async def mark_contact_read(cid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.contacts.update_one({'id': cid}, {'$set': {'read': True}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'mark_contact_read', cid)
     return {'ok': True}
 
 @api_router.delete('/contact/{cid}')
-async def delete_contact(cid: str, _: Dict = Depends(require_admin)):
+async def delete_contact(cid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.contacts.delete_one({'id': cid})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_contact', cid)
     return {'ok': True}
 
 # ------------------ SETTINGS ------------------
@@ -1158,11 +1177,12 @@ async def get_settings():
     return s
 
 @api_router.put('/settings')
-async def update_settings(s: SettingsIn, _: Dict = Depends(require_admin)):
+async def update_settings(s: SettingsIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = {k: v for k, v in s.model_dump().items() if v is not None}
     doc['id'] = 'main'
     doc['updated_at'] = now_iso()
     await db.settings.update_one({'id': 'main'}, {'$set': doc}, upsert=True)
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_settings', 'main')
     return await db.settings.find_one({'id': 'main'}, {'_id': 0})
 
 # ------------------ ADMIN STATS ------------------
@@ -1483,6 +1503,10 @@ async def root():
     return {'app': 'Kiran Traders API', 'version': '1.0.0'}
 
 app.include_router(api_router)
+
+app.add_middleware(
+    security.SecureHeadersMiddleware,
+)
 
 app.add_middleware(
     CORSMiddleware,

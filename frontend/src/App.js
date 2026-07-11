@@ -7,7 +7,7 @@ import { ThemeProvider } from './lib/theme';
 import { SettingsProvider } from './lib/settings';
 import PublicLayout from './components/PublicLayout';
 import AdminLayout from './components/AdminLayout';
-import RequireAdmin from './components/RequireAdmin';
+import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
 
 // Public
@@ -68,7 +68,7 @@ function App() {
                       <Route path="/wishlist" element={<Wishlist />} />
                     </Route>
                     <Route path="/admin/login" element={<AdminLogin />} />
-                    <Route element={<RequireAdmin />}>
+                    <Route element={<ProtectedRoute />}>
                       <Route element={<AdminLayout />}>
                         <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
                         <Route path="/admin/dashboard" element={<AdminDashboard />} />
