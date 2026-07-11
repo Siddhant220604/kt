@@ -54,8 +54,8 @@ async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(
     if payload.get('role') != 'admin':
         raise HTTPException(status_code=403, detail='Admin access required')
 
-    from . import server
-    user = await server.db.users.find_one({'id': payload.get('sub')})
+    from server import db as server_db
+    user = await server_db.users.find_one({'id': payload.get('sub')})
     if not user:
         raise HTTPException(status_code=401, detail='Invalid token')
     if payload.get('token_version', 0) != user.get('token_version', 0):
