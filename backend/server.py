@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, status, BackgroundTasks
 from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
@@ -14,9 +14,14 @@ from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
 import asyncio
+import hashlib
+import hmac
 import io
 import base64
 import qrcode
+import smtplib
+import requests
+from email.message import EmailMessage
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -33,6 +38,25 @@ db = client[os.environ.get('DB_NAME', 'kiran_traders')]
 JWT_SECRET = os.environ.get('JWT_SECRET', 'kiran-traders-secret-key-change-in-prod-2004')
 JWT_ALGO = 'HS256'
 JWT_EXPIRE_HOURS = 24 * 7
+DEFAULT_BUSINESS_EMAIL = 'kirantraders1996@gmail.com'
+
+MAIL_HOST = os.environ.get('MAIL_HOST', '')
+mail_port_env = os.environ.get('MAIL_PORT', '587')
+MAIL_PORT = int(mail_port_env) if mail_port_env and mail_port_env.strip().isdigit() else 587
+MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'true').lower() in ('1', 'true', 'yes')
+MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'false').lower() in ('1', 'true', 'yes')
+MAIL_USERNAME = os.environ.get('MAIL_USERNAME', '')
+MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD', '')
+MAIL_FROM = os.environ.get('MAIL_FROM', f'Kiran Traders <{DEFAULT_BUSINESS_EMAIL}>')
+MAIL_TO = os.environ.get('MAIL_TO', DEFAULT_BUSINESS_EMAIL)
+
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
+
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
+TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
+WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
 
 app = FastAPI(title="Kiran Traders API")
 api_router = APIRouter(prefix="/api")
@@ -104,6 +128,15 @@ def gen_order_id() -> str:
     rand = uuid.uuid4().hex[:6].upper()
     return f"KT{ts}{rand}"
 
+
+def generate_razorpay_signature(payload: str, secret: str) -> str:
+    return hmac.new(secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def verify_razorpay_signature(order_id: str, payment_id: str, signature: str, secret: str) -> bool:
+    expected = generate_razorpay_signature(f"{order_id}|{payment_id}", secret)
+    return hmac.compare_digest(expected, signature or '')
+
 # ------------------ MODELS ------------------
 
 class LoginRequest(BaseModel):
@@ -149,7 +182,7 @@ class CartItem(BaseModel):
 class AddressIn(BaseModel):
     name: str
     mobile: str
-    email: Optional[str] = ''
+    email: EmailStr
     address_line1: str
     address_line2: Optional[str] = ''
     city: str
@@ -161,9 +194,21 @@ class AddressIn(BaseModel):
 class OrderIn(BaseModel):
     items: List[CartItem]
     address: AddressIn
-    payment_method: str  # cod | upi | bank_transfer
+    payment_method: str  # cod | upi | bank_transfer | online
     notes: Optional[str] = ''
     coupon_code: Optional[str] = ''
+
+class PaymentCreateOrderRequest(BaseModel):
+    order_id: str
+    amount: Optional[int] = None
+    currency: str = 'INR'
+    notes: Optional[Dict[str, Any]] = None
+
+class PaymentVerifyRequest(BaseModel):
+    order_id: str
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
 
 class OrderStatusUpdate(BaseModel):
     status: str  # pending | confirmed | packed | shipped | delivered | cancelled
@@ -387,6 +432,11 @@ async def list_coupons(_: Dict = Depends(require_admin)):
     docs = await db.coupons.find({}, {'_id': 0}).sort('created_at', -1).to_list(500)
     return docs
 
+@api_router.get('/coupons/public')
+async def public_coupons():
+    docs = await db.coupons.find({'active': True}, {'_id': 0}).sort('created_at', -1).to_list(500)
+    return docs
+
 @api_router.post('/coupons')
 async def create_coupon(c: CouponIn, _: Dict = Depends(require_admin)):
     doc = c.model_dump()
@@ -442,6 +492,113 @@ async def validate_coupon(req: CouponValidate):
         discount = c['value']
     discount = round(min(discount, req.subtotal), 2)
     return {'code': c['code'], 'discount': discount, 'type': c['type'], 'value': c['value']}
+
+# ------------------ PAYMENTS ------------------
+
+@api_router.post('/payment/create-order')
+async def create_razorpay_order(req: PaymentCreateOrderRequest):
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=400, detail='Razorpay is not configured yet. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to the backend environment.')
+
+    order = await db.orders.find_one({'id': req.order_id}, {'_id': 0})
+    if not order:
+        raise HTTPException(status_code=404, detail='Order not found')
+
+    amount = req.amount if req.amount is not None else max(1, int(round(float(order.get('total', 0)) * 100)))
+    payload = {
+        'amount': amount,
+        'currency': req.currency or 'INR',
+        'receipt': order['id'],
+        'notes': req.notes or {
+            'order_id': order['id'],
+            'customer_name': (order.get('address') or {}).get('name', ''),
+            'customer_mobile': (order.get('address') or {}).get('mobile', ''),
+        },
+    }
+
+    try:
+        response = requests.post(
+            'https://api.razorpay.com/v1/orders',
+            auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+            json=payload,
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:
+        logger.error('Failed to create Razorpay order: %s', exc)
+        raise HTTPException(status_code=502, detail='Unable to create Razorpay order right now.') from exc
+
+    return {
+        'order_id': order['id'],
+        'razorpay_order_id': data.get('id'),
+        'amount': data.get('amount'),
+        'currency': data.get('currency'),
+        'key_id': RAZORPAY_KEY_ID,
+    }
+
+
+@api_router.post('/payment/verify')
+async def verify_razorpay_payment(req: PaymentVerifyRequest):
+    if not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=400, detail='Razorpay is not configured yet.')
+
+    if not verify_razorpay_signature(req.razorpay_order_id, req.razorpay_payment_id, req.razorpay_signature, RAZORPAY_KEY_SECRET):
+        raise HTTPException(status_code=400, detail='Invalid payment signature')
+
+    order = await db.orders.find_one({'id': req.order_id}, {'_id': 0})
+    if not order:
+        raise HTTPException(status_code=404, detail='Order not found')
+
+    await db.orders.update_one({'id': req.order_id}, {'$set': {
+        'payment_status': 'paid',
+        'status': 'confirmed',
+        'updated_at': now_iso(),
+        'payment_details': {
+            'razorpay_order_id': req.razorpay_order_id,
+            'razorpay_payment_id': req.razorpay_payment_id,
+            'verified_at': now_iso(),
+        },
+    }})
+    updated = await db.orders.find_one({'id': req.order_id}, {'_id': 0})
+    settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    send_order_notification(updated, settings)
+    return {'ok': True, 'order': updated}
+
+
+@api_router.post('/payment/webhook')
+async def razorpay_webhook(request: Any):
+    signature = request.headers.get('X-Razorpay-Signature', '')
+    if not signature or not RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=400, detail='Invalid webhook request')
+
+    body = await request.body()
+    expected = generate_razorpay_signature(body.decode('utf-8'), RAZORPAY_KEY_SECRET)
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=400, detail='Invalid webhook signature')
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid webhook payload')
+
+    event = payload.get('event', '')
+    if event in {'payment.authorized', 'order.paid'}:
+        payment = payload.get('payload', {}).get('payment', {}).get('entity', {})
+        order_id = payment.get('notes', {}).get('order_id') or payload.get('payload', {}).get('order', {}).get('entity', {}).get('receipt')
+        if order_id:
+            await db.orders.update_one({'id': order_id}, {'$set': {
+                'payment_status': 'paid',
+                'status': 'confirmed',
+                'updated_at': now_iso(),
+                'payment_details': {
+                    'razorpay_order_id': payload.get('payload', {}).get('order', {}).get('entity', {}).get('id'),
+                    'razorpay_payment_id': payment.get('id'),
+                    'verified_at': now_iso(),
+                },
+            }})
+    return {'ok': True}
+
 
 # ------------------ ORDERS ------------------
 
@@ -514,6 +671,7 @@ async def create_order(order: OrderIn):
     if coupon_code:
         await db.coupons.update_one({'code': coupon_code}, {'$inc': {'used_count': 1}})
     doc.pop('_id', None)
+    send_order_notification(doc, settings)
     return doc
 
 @api_router.post('/orders/track')
@@ -686,13 +844,252 @@ async def delete_review(rid: str, _: Dict = Depends(require_admin)):
 
 # ------------------ CONTACTS ------------------
 
+def send_contact_email(contact: Dict[str, Any]) -> None:
+    if not MAIL_HOST or not MAIL_USERNAME or not MAIL_PASSWORD or not MAIL_TO:
+        logger.warning('SMTP email not sent: missing MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD, or MAIL_TO configuration')
+        return
+
+    msg = EmailMessage()
+    subject = contact.get('subject') or 'New contact message from website'
+    msg['Subject'] = f'Contact inquiry: {subject}'
+    msg['From'] = MAIL_FROM
+    msg['To'] = MAIL_TO
+    if contact.get('email'):
+        msg['Reply-To'] = contact['email']
+
+    lines = [
+        f"Name: {contact.get('name', '')}",
+        f"Mobile: {contact.get('mobile', '')}",
+        f"Email: {contact.get('email', '')}",
+        f"Subject: {contact.get('subject', '')}",
+        '',
+        'Message:',
+        contact.get('message', ''),
+        '',
+        f"Received: {contact.get('created_at', '')}",
+    ]
+    msg.set_content('\n'.join(lines))
+
+    try:
+        if MAIL_USE_SSL:
+            smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=15)
+        else:
+            smtp = smtplib.SMTP(MAIL_HOST, MAIL_PORT, timeout=15)
+        with smtp:
+            smtp.ehlo()
+            if MAIL_USE_TLS and not MAIL_USE_SSL:
+                smtp.starttls()
+                smtp.ehlo()
+            smtp.login(MAIL_USERNAME, MAIL_PASSWORD)
+            smtp.send_message(msg)
+        logger.info('Contact email sent to %s', MAIL_TO)
+    except Exception as exc:
+        logger.error('Failed to send contact email: %s', exc)
+
+
+def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_FROM:
+        logger.info('WhatsApp order notification skipped: Twilio credentials not configured')
+        return
+
+    address = order.get('address') or {}
+    mobile = str(address.get('mobile') or '').strip()
+    if not mobile:
+        logger.info('WhatsApp order notification skipped: no customer mobile number for order %s', order.get('id'))
+        return
+
+    mobile = mobile.lstrip('+')
+    if not mobile.isdigit():
+        logger.info('WhatsApp order notification skipped: invalid mobile number for order %s', order.get('id'))
+        return
+
+    if not mobile.startswith('91') and WHATSAPP_DEFAULT_COUNTRY_CODE:
+        mobile = f"{WHATSAPP_DEFAULT_COUNTRY_CODE.lstrip('+')}{mobile}"
+
+    order_id = order.get('id') or order.get('order_number') or 'N/A'
+    business_name = (settings or {}).get('business_name') or 'Kiran Traders'
+    total = order.get('total') or 0
+    items = order.get('items') or []
+    item_summary = ', '.join(f"{item.get('name', 'Item')} x{item.get('quantity', 1)}" for item in items[:3])
+    if len(items) > 3:
+        item_summary += ' ...'
+
+    msg_body = (
+        f"Hi {address.get('name') or 'Customer'}! Your order {order_id} with {business_name} is confirmed. "
+        f"Total: Rs.{total:.2f}. Items: {item_summary or 'See order details'}."
+    )
+
+    try:
+        requests.post(
+            'https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json'.format(sid=TWILIO_ACCOUNT_SID),
+            data={
+                'To': f'whatsapp:+{mobile}',
+                'From': TWILIO_WHATSAPP_FROM,
+                'Body': msg_body,
+            },
+            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            timeout=15,
+        ).raise_for_status()
+        logger.info('WhatsApp order confirmation sent to %s for order %s', mobile, order_id)
+    except Exception as exc:
+        logger.error('Failed to send WhatsApp order notification: %s', exc)
+
+
+def send_order_notification(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
+    if not MAIL_HOST or not MAIL_USERNAME or not MAIL_PASSWORD:
+        logger.warning('SMTP email not sent: missing MAIL_HOST, MAIL_USERNAME, or MAIL_PASSWORD configuration')
+    else:
+        address = order.get('address') or {}
+        recipient = (address.get('email') or '').strip()
+        if not recipient:
+            logger.info('Order notification skipped: no customer email provided for order %s', order.get('id'))
+        else:
+            business_name = (settings or {}).get('business_name') or 'Kiran Traders'
+            order_id = order.get('id') or order.get('order_number') or 'N/A'
+            total = order.get('total') or 0
+            items = order.get('items') or []
+
+            msg = EmailMessage()
+            msg['Subject'] = f'Order confirmed | {order_id}'
+            msg['From'] = MAIL_FROM
+            msg['To'] = recipient
+            msg['Reply-To'] = MAIL_FROM
+            msg['X-Mailer'] = 'Kiran Traders Order System'
+
+            customer_name = address.get('name') or 'Customer'
+            payment_method = order.get('payment_method', 'Pending').replace('_', ' ').title()
+            order_date = order.get('created_at', '')[:10] or datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            address_lines = [
+                address.get('name', ''),
+                address.get('address_line1', ''),
+                address.get('address_line2', ''),
+                f"{address.get('city', '')}, {address.get('state', '')} {address.get('pincode', '')}".strip(', '),
+                f"Mobile: {address.get('mobile', '')}",
+                f"Email: {address.get('email', '')}",
+            ]
+            address_lines = [line for line in address_lines if line]
+
+            plain_lines = [
+                f'Dear {customer_name},',
+                '',
+                f'Thank you for your order from {business_name}.',
+                f'Order ID: {order_id}',
+                f'Date: {order_date}',
+                f'Payment method: {payment_method}',
+                '',
+                'Delivery address:',
+                *address_lines,
+                '',
+                'Order summary:',
+            ]
+            for item in items:
+                name = item.get('name', 'Item')
+                qty = item.get('quantity', 1)
+                price = item.get('price', 0)
+                plain_lines.append(f'- {name} x{qty} @ Rs.{price:.2f}')
+            plain_lines.extend([
+                '',
+                f'Subtotal: Rs.{order.get("subtotal", 0):.2f}',
+                f'Discount: Rs.{order.get("discount", 0):.2f}',
+                f'Tax: Rs.{order.get("tax", 0):.2f}',
+                f'Shipping: Rs.{order.get("shipping", 0):.2f}',
+                f'Total: Rs.{total:.2f}',
+                '',
+                'Please find your invoice attached to this email.',
+                '',
+                'We will update you as your order moves through processing.',
+                '',
+                'Warm regards,',
+                business_name,
+            ])
+            msg.set_content('\n'.join(plain_lines))
+
+            if str(MAIL_HOST).lower() != 'smtp.example.com':
+                html_items = ''.join(
+                    f'<tr>'
+                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3;">{item.get("name", "Item")}</td>'
+                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3; text-align:center;">{item.get("quantity", 1)}</td>'
+                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3; text-align:right;">Rs.{item.get("price", 0):.2f}</td>'
+                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3; text-align:right;">Rs.{item.get("total", 0):.2f}</td>'
+                    f'</tr>'
+                    for item in items
+                )
+                html_address = ''.join(f'<p style="margin:2px 0;">{line}</p>' for line in address_lines)
+                html_body = f"""
+                <html>
+                  <body style="font-family: Arial, sans-serif; color: #222; line-height: 1.5;">
+                    <div style="max-width: 680px; margin: 0 auto; padding: 24px; background: #faf7f2; border: 1px solid #e6ddd4;">
+                      <h1 style="margin-bottom: 0; font-size: 26px; color: #5a3820;">Order Confirmed</h1>
+                      <p style="margin-top: 4px; color: #5a3820;">Thank you for shopping with {business_name}.</p>
+                      <hr style="border:none; border-top:1px solid #e0d4c3; margin: 24px 0;" />
+                      <p><strong>Order ID:</strong> {order_id}<br />
+                      <strong>Date:</strong> {order_date}<br />
+                      <strong>Payment:</strong> {payment_method}</p>
+                      <h2 style="font-size: 18px; margin-bottom: 8px;">Delivery Address</h2>
+                      <div style="padding: 12px; background: #fff; border: 1px solid #e0d4c3; margin-bottom: 16px;">{html_address}</div>
+                      <h2 style="font-size: 18px; margin-bottom: 8px;">Order Summary</h2>
+                      <table style="border-collapse: collapse; width: 100%; background: #fff;">
+                        <thead>
+                          <tr>
+                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:left;">Product</th>
+                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:center;">Qty</th>
+                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:right;">Rate</th>
+                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:right;">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {html_items}
+                        </tbody>
+                      </table>
+                      <div style="margin-top: 16px; padding: 16px; background: #fff; border: 1px solid #e0d4c3;">
+                        <p style="margin: 4px 0;"><strong>Subtotal:</strong> Rs.{order.get('subtotal', 0):.2f}</p>
+                        <p style="margin: 4px 0;"><strong>Discount:</strong> Rs.{order.get('discount', 0):.2f}</p>
+                        <p style="margin: 4px 0;"><strong>GST:</strong> Rs.{order.get('tax', 0):.2f}</p>
+                        <p style="margin: 4px 0;"><strong>Shipping:</strong> Rs.{order.get('shipping', 0):.2f}</p>
+                        <p style="margin: 10px 0 0; font-size: 16px; font-weight: bold;"><strong>Total:</strong> Rs.{total:.2f}</p>
+                      </div>
+                      <p style="margin-top: 20px;">Your digital invoice is attached to this email. Please keep it for your records.</p>
+                      <p style="margin-top: 20px;">We will update you as your order moves through processing.</p>
+                      <p style="margin-top: 32px;">Warm regards,<br />{business_name}</p>
+                    </div>
+                  </body>
+                </html>
+                """
+                msg.add_alternative(html_body, subtype='html')
+
+                try:
+                    invoice_pdf = build_invoice_pdf(order, settings or {})
+                    msg.add_attachment(invoice_pdf, maintype='application', subtype='pdf', filename=f'invoice-{order_id}.pdf')
+                except Exception as exc:
+                    logger.error('Failed to attach invoice PDF: %s', exc)
+
+            try:
+                if MAIL_USE_SSL:
+                    smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=15)
+                else:
+                    smtp = smtplib.SMTP(MAIL_HOST, MAIL_PORT, timeout=15)
+                with smtp:
+                    smtp.ehlo()
+                    if MAIL_USE_TLS and not MAIL_USE_SSL:
+                        smtp.starttls()
+                        smtp.ehlo()
+                    smtp.login(MAIL_USERNAME, MAIL_PASSWORD)
+                    smtp.send_message(msg)
+                logger.info('Order confirmation email sent to %s for order %s', recipient, order_id)
+            except Exception as exc:
+                logger.error('Failed to send order notification email: %s', exc)
+
+    send_order_whatsapp(order, settings)
+
+
 @api_router.post('/contact')
-async def contact_submit(c: ContactIn):
+async def contact_submit(c: ContactIn, background_tasks: BackgroundTasks):
     doc = c.model_dump()
     doc['id'] = str(uuid.uuid4())
     doc['created_at'] = now_iso()
     doc['read'] = False
     await db.contacts.insert_one(doc)
+    background_tasks.add_task(send_contact_email, doc)
     doc.pop('_id', None)
     return doc
 
@@ -716,6 +1113,8 @@ async def delete_contact(cid: str, _: Dict = Depends(require_admin)):
 @api_router.get('/settings')
 async def get_settings():
     s = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    if not s.get('email'):
+        s['email'] = DEFAULT_BUSINESS_EMAIL
     return s
 
 @api_router.put('/settings')
@@ -905,7 +1304,7 @@ async def seed_db():
             'phone': '+91 9044057739',
             'phone2': '+91 9044097739',
             'whatsapp': '919044057739',
-            'email': 'kirantraders@gmail.com',
+            'email': 'kirantraders1996@gmail.com',
             'upi_id': upi_id,
             'upi_qr': qr_b64,
             'bank_details': 'Account Name: Kiran Traders\nBank: State Bank of India\nA/C No: 12345678901\nIFSC: SBIN0001234\nBranch: Aashiyana, Lucknow',
