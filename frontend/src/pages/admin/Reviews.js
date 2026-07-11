@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -9,8 +9,8 @@ import { toast } from 'sonner';
 export default function AdminReviews() {
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState('pending');
-  const load = () => api.get('/reviews', { params: { approved: filter === 'pending' ? false : true } }).then(r => setRows(r.data));
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter]);
+  const load = useCallback(() => api.get('/reviews', { params: { approved: filter === 'pending' ? false : true } }).then(r => setRows(r.data)), [filter]);
+  useEffect(() => { load(); }, [load]);
 
   const approve = async (id) => { await api.put(`/reviews/${id}/approve`); toast.success('Approved'); load(); };
   const del = async (id) => { if (!window.confirm('Delete review?')) return; await api.delete(`/reviews/${id}`); load(); };

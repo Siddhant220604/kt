@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { api, formatINR } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -23,13 +23,16 @@ export default function AdminProducts() {
   const [q, setQ] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
-    const params = { limit: 200 }; if (q) params.search = q;
+    const params = { limit: 200 };
+    if (q) params.search = q;
     const [{ data: pd }, { data: cd }] = await Promise.all([api.get('/products', { params }), api.get('/categories')]);
-    setData(pd); setCats(cd); setLoading(false);
-  };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+    setData(pd);
+    setCats(cd);
+    setLoading(false);
+  }, [q]);
+  useEffect(() => { load(); }, [load]);
 
   const openNew = () => setEdit({ ...empty, category_id: cats[0]?.id || '' });
   const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specs: p.specs || {}, tags: p.tags || [] });

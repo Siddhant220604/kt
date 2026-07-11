@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, formatINR } from '../lib/api';
 import { Container, Section } from '../components/site/Section';
@@ -30,7 +30,7 @@ export default function ProductDetail() {
   const { settings } = useSettings();
   const [reviewForm, setReviewForm] = useState({ name: '', rating: 5, title: '', comment: '' });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.get(`/products/${idOrSlug}`);
@@ -38,11 +38,15 @@ export default function ProductDetail() {
       setQty(data.moq || 1);
       const { data: rv } = await api.get(`/reviews/product/${data.id}`);
       setReviews(rv);
-    } catch (e) { toast.error('Product not found'); navigate('/products'); }
-    finally { setLoading(false); }
-  };
+    } catch (e) {
+      toast.error('Product not found');
+      navigate('/products');
+    } finally {
+      setLoading(false);
+    }
+  }, [idOrSlug, navigate]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [idOrSlug]);
+  useEffect(() => { load(); }, [load]);
 
   if (loading || !product) return (
     <Container className="py-10">

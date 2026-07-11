@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api, formatINR, API } from '../../lib/api';
 import { Button } from '../../components/ui/button';
@@ -17,8 +17,8 @@ export default function AdminOrderDetail() {
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const load = () => api.get(`/orders/${oid}`).then(r => { setOrder(r.data); setNext(r.data.status); });
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [oid]);
+  const load = useCallback(() => api.get(`/orders/${oid}`).then(r => { setOrder(r.data); setNext(r.data.status); }), [oid]);
+  useEffect(() => { load(); }, [load]);
 
   const updateStatus = async () => {
     setSaving(true);
