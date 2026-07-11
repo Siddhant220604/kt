@@ -928,20 +928,27 @@ def send_contact_email(contact: Dict[str, Any]) -> None:
     msg.set_content('\n'.join(lines))
 
     try:
+        logger.info('Connecting to SMTP host...')
         if MAIL_USE_SSL:
             smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=15)
         else:
             smtp = smtplib.SMTP(MAIL_HOST, MAIL_PORT, timeout=15)
+        logger.info('Connected successfully')
         with smtp:
-            smtp.ehlo()
+            logger.info('Starting TLS...')
             if MAIL_USE_TLS and not MAIL_USE_SSL:
                 smtp.starttls()
                 smtp.ehlo()
+            logger.info('TLS started')
+            logger.info('Logging in...')
             smtp.login(MAIL_USERNAME, MAIL_PASSWORD)
+            logger.info('Logged in successfully')
+            logger.info('Sending email...')
             smtp.send_message(msg)
+            logger.info('Email sent successfully')
         logger.info('Contact email sent to %s', MAIL_TO)
-    except Exception as exc:
-        logger.error('Failed to send contact email: %s', exc)
+    except Exception:
+        logger.exception('Failed to send contact email')
 
 
 def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
@@ -1121,20 +1128,27 @@ def send_order_notification(order: Dict[str, Any], settings: Optional[Dict[str, 
                     logger.error('Failed to attach invoice PDF: %s', exc)
 
             try:
+                logger.info('Connecting to SMTP host...')
                 if MAIL_USE_SSL:
                     smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=15)
                 else:
                     smtp = smtplib.SMTP(MAIL_HOST, MAIL_PORT, timeout=15)
+                logger.info('Connected successfully')
                 with smtp:
-                    smtp.ehlo()
+                    logger.info('Starting TLS...')
                     if MAIL_USE_TLS and not MAIL_USE_SSL:
                         smtp.starttls()
                         smtp.ehlo()
+                    logger.info('TLS started')
+                    logger.info('Logging in...')
                     smtp.login(MAIL_USERNAME, MAIL_PASSWORD)
+                    logger.info('Logged in successfully')
+                    logger.info('Sending email...')
                     smtp.send_message(msg)
+                    logger.info('Email sent successfully')
                 logger.info('Order confirmation email sent to %s for order %s', recipient, order_id)
-            except Exception as exc:
-                logger.error('Failed to send order notification email: %s', exc)
+            except Exception:
+                logger.exception('Failed to send order notification email')
 
     send_order_whatsapp(order, settings)
 
