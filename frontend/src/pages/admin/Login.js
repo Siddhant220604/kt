@@ -9,7 +9,7 @@ import { Store, LockKeyhole } from 'lucide-react';
 
 export default function AdminLogin() {
   const nav = useNavigate();
-  const [form, setForm] = useState({ email: 'admin@kirantraders.com', password: 'Admin@123' });
+  const [form, setForm] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
 
   const submit = async (e) => {
