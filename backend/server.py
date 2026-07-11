@@ -1,11 +1,8 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, status, BackgroundTasks, Request
 from fastapi.responses import Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import bcrypt
-import jwt
 import os
 import logging
 from pathlib import Path
@@ -60,17 +57,11 @@ TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
 
-JWT_SECRET = os.environ['JWT_SECRET']
-JWT_ALGO = 'HS256'
-JWT_EXPIRE_HOURS = int(os.environ.get('JWT_EXPIRE_HOURS', '2'))
-
 app = FastAPI(title="Kiran Traders API")
 api_router = APIRouter(prefix="/api")
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-bearer_scheme = HTTPBearer(auto_error=False)
 
 # ------------------ HELPERS ------------------
 
@@ -98,43 +89,10 @@ def serialize_doc(doc: Any) -> Any:
         return doc.isoformat()
     return doc
 
-def hash_password(pw: str) -> str:
-    return bcrypt.hashpw(pw.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def verify_password(pw: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(pw.encode('utf-8'), hashed.encode('utf-8'))
-    except Exception:
-        return False
-
-def create_token(user_id: str, email: str, role: str = 'admin', token_version: int = 0) -> str:
-    payload = {
-        'sub': user_id,
-        'email': email,
-        'role': role,
-        'token_version': token_version,
-        'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
-        'iat': datetime.now(timezone.utc),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
-
-async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:
-    if creds is None:
-        raise HTTPException(status_code=401, detail='Missing token')
-    try:
-        payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALGO])
-        if payload.get('role') != 'admin':
-            raise HTTPException(status_code=403, detail='Admin only')
-        user = await db.users.find_one({'id': payload.get('sub')})
-        if not user:
-            raise HTTPException(status_code=401, detail='Invalid token')
-        if payload.get('token_version', 0) != user.get('token_version', 0):
-            raise HTTPException(status_code=401, detail='Token invalidated')
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail='Token expired')
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail='Invalid token')
+hash_password = auth.hash_password
+verify_password = auth.verify_password
+create_token = auth.create_access_token
+require_admin = dependencies.require_admin
 
 def gen_order_id() -> str:
     ts = datetime.now(timezone.utc).strftime('%Y%m%d')
@@ -316,6 +274,18 @@ async def me(payload: Dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail='User not found')
     return {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}
 
+@api_router.get('/profile')
+async def get_profile(payload: Dict = Depends(require_admin)):
+    u = await db.users.find_one({'id': payload['sub']})
+    if not u:
+        raise HTTPException(status_code=404, detail='User not found')
+    return {'name': u.get('name', ''), 'email': u['email'], 'role': u.get('role', 'admin')}
+
+@api_router.get('/login-history')
+async def get_login_history(payload: Dict = Depends(require_admin)):
+    logs = await db.audit_logs.find({'admin_email': payload.get('email'), 'action': 'admin_login'}, {'_id': 0}).sort('timestamp', -1).limit(50).to_list(50)
+    return logs
+
 @api_router.get('/admin/profile')
 async def get_admin_profile(payload: Dict = Depends(require_admin)):
     u = await db.users.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0, 'token_version': 0})
@@ -344,9 +314,9 @@ async def change_admin_password(req: ChangePasswordRequest, request: Request, pa
     if req.new_password != req.confirm_password:
         raise HTTPException(status_code=400, detail='New password and confirmation do not match')
     u = await db.users.find_one({'id': payload['sub']})
-    if not u or not verify_password(req.current_password, u.get('password_hash', '')):
+    if not u or not auth.verify_password(req.current_password, u.get('password_hash', '')):
         raise HTTPException(status_code=401, detail='Invalid email or password')
-    hashed = hash_password(req.new_password)
+    hashed = auth.hash_password(req.new_password)
     await db.users.update_one({'id': payload['sub']}, {'$set': {'password_hash': hashed}})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'change_password', payload['sub'])
     return {'ok': True}
@@ -1352,7 +1322,7 @@ async def seed_db():
         await db.users.insert_one({
             'id': str(uuid.uuid4()),
             'email': admin_email.lower(),
-            'password_hash': hash_password(admin_password),
+            'password_hash': auth.hash_password(admin_password),
             'name': 'Kiran Traders Admin',
             'role': 'admin',
             'token_version': 0,
