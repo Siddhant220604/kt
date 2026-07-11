@@ -1,9 +1,11 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, status, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, status, BackgroundTasks, Request
 from fastapi.responses import Response
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import bcrypt
+import jwt
 import os
 import logging
 from pathlib import Path
@@ -11,8 +13,6 @@ from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from typing import List, Optional, Any, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
-import bcrypt
-import jwt
 import asyncio
 import hashlib
 import hmac
@@ -21,6 +21,11 @@ import base64
 import qrcode
 import smtplib
 import requests
+
+import auth
+import audit
+import dependencies
+import security
 from email.message import EmailMessage
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -35,9 +40,6 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'kiran_traders')]
 
-JWT_SECRET = os.environ.get('JWT_SECRET', 'kiran-traders-secret-key-change-in-prod-2004')
-JWT_ALGO = 'HS256'
-JWT_EXPIRE_HOURS = 24 * 7
 DEFAULT_BUSINESS_EMAIL = 'kirantraders1996@gmail.com'
 
 MAIL_HOST = os.environ.get('MAIL_HOST', '')
@@ -58,12 +60,17 @@ TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
 
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALGO = 'HS256'
+JWT_EXPIRE_HOURS = int(os.environ.get('JWT_EXPIRE_HOURS', '2'))
+
 app = FastAPI(title="Kiran Traders API")
 api_router = APIRouter(prefix="/api")
-bearer_scheme = HTTPBearer(auto_error=False)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+bearer_scheme = HTTPBearer(auto_error=False)
 
 # ------------------ HELPERS ------------------
 
@@ -100,11 +107,12 @@ def verify_password(pw: str, hashed: str) -> bool:
     except Exception:
         return False
 
-def create_token(user_id: str, email: str, role: str = 'admin') -> str:
+def create_token(user_id: str, email: str, role: str = 'admin', token_version: int = 0) -> str:
     payload = {
         'sub': user_id,
         'email': email,
         'role': role,
+        'token_version': token_version,
         'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
         'iat': datetime.now(timezone.utc),
     }
@@ -117,6 +125,11 @@ async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(
         payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALGO])
         if payload.get('role') != 'admin':
             raise HTTPException(status_code=403, detail='Admin only')
+        user = await db.users.find_one({'id': payload.get('sub')})
+        if not user:
+            raise HTTPException(status_code=401, detail='Invalid token')
+        if payload.get('token_version', 0) != user.get('token_version', 0):
+            raise HTTPException(status_code=401, detail='Token invalidated')
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail='Token expired')
@@ -142,6 +155,14 @@ def verify_razorpay_signature(order_id: str, payment_id: str, signature: str, se
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+class ChangeEmailRequest(BaseModel):
+    email: EmailStr
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str
 
 class CategoryIn(BaseModel):
     name: str
@@ -277,11 +298,15 @@ class SettingsIn(BaseModel):
 # ------------------ AUTH ROUTES ------------------
 
 @api_router.post('/auth/login')
-async def admin_login(req: LoginRequest):
+async def admin_login(req: LoginRequest, request: Request):
+    dependencies.check_login_rate_limit(request)
     u = await db.users.find_one({'email': req.email.lower()})
     if not u or not verify_password(req.password, u.get('password_hash', '')):
-        raise HTTPException(status_code=401, detail='Invalid credentials')
-    token = create_token(u['id'], u['email'], u.get('role', 'admin'))
+        dependencies.record_failed_login(request)
+        raise HTTPException(status_code=401, detail='Invalid email or password')
+    dependencies.clear_failed_logins(request)
+    token = create_token(u['id'], u['email'], u.get('role', 'admin'), u.get('token_version', 0))
+    await audit.record_audit(db, u['email'], security.get_client_ip(request), 'admin_login', u['id'])
     return {'token': token, 'user': {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}}
 
 @api_router.get('/auth/me')
@@ -290,6 +315,51 @@ async def me(payload: Dict = Depends(require_admin)):
     if not u:
         raise HTTPException(status_code=404, detail='User not found')
     return {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}
+
+@api_router.get('/admin/profile')
+async def get_admin_profile(payload: Dict = Depends(require_admin)):
+    u = await db.users.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0, 'token_version': 0})
+    if not u:
+        raise HTTPException(status_code=404, detail='User not found')
+    return {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}
+
+@api_router.get('/admin/login-history')
+async def get_admin_login_history(payload: Dict = Depends(require_admin)):
+    logs = await db.audit_logs.find({'admin_email': payload.get('email'), 'action': 'admin_login'}, {'_id': 0}).sort('timestamp', -1).limit(50).to_list(50)
+    return logs
+
+@api_router.post('/admin/profile/email')
+async def change_admin_email(req: ChangeEmailRequest, request: Request, payload: Dict = Depends(require_admin)):
+    email = security.sanitize_value(req.email).lower()
+    if await db.users.find_one({'email': email}):
+        raise HTTPException(status_code=400, detail='Email already in use')
+    result = await db.users.update_one({'id': payload['sub']}, {'$set': {'email': email}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail='User not found')
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'change_email', payload['sub'], {'new_email': email})
+    return {'ok': True, 'email': email}
+
+@api_router.post('/admin/profile/password')
+async def change_admin_password(req: ChangePasswordRequest, request: Request, payload: Dict = Depends(require_admin)):
+    if req.new_password != req.confirm_password:
+        raise HTTPException(status_code=400, detail='New password and confirmation do not match')
+    u = await db.users.find_one({'id': payload['sub']})
+    if not u or not verify_password(req.current_password, u.get('password_hash', '')):
+        raise HTTPException(status_code=401, detail='Invalid email or password')
+    hashed = hash_password(req.new_password)
+    await db.users.update_one({'id': payload['sub']}, {'$set': {'password_hash': hashed}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'change_password', payload['sub'])
+    return {'ok': True}
+
+@api_router.post('/admin/profile/logout-all')
+async def logout_all_admin_devices(request: Request, payload: Dict = Depends(require_admin)):
+    user = await db.users.find_one({'id': payload['sub']})
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    token_version = user.get('token_version', 0) + 1
+    await db.users.update_one({'id': payload['sub']}, {'$set': {'token_version': token_version}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'logout_all_devices', payload['sub'])
+    return {'ok': True}
 
 # ------------------ CATEGORIES ------------------
 
@@ -1276,16 +1346,21 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
 
 async def seed_db():
     # admin user
-    if not await db.users.find_one({'email': 'admin@kirantraders.com'}):
+    admin_email = os.environ.get('ADMIN_EMAIL')
+    admin_password = os.environ.get('ADMIN_PASSWORD')
+    if admin_email and admin_password and not await db.users.find_one({'email': admin_email.lower()}):
         await db.users.insert_one({
             'id': str(uuid.uuid4()),
-            'email': 'admin@kirantraders.com',
-            'password_hash': hash_password('Admin@123'),
+            'email': admin_email.lower(),
+            'password_hash': hash_password(admin_password),
             'name': 'Kiran Traders Admin',
             'role': 'admin',
+            'token_version': 0,
             'created_at': now_iso(),
         })
-        logger.info('Seeded admin user: admin@kirantraders.com / Admin@123')
+        logger.info('Seeded admin user: %s', admin_email.lower())
+    elif not await db.users.find_one({'role': 'admin'}):
+        logger.warning('No admin user found. Set ADMIN_EMAIL and ADMIN_PASSWORD in environment to create an admin account.')
 
     # settings
     if not await db.settings.find_one({'id': 'main'}):

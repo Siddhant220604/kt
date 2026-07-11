@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, formatINR } from '../../lib/api';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Badge } from '../../components/ui/badge';
+import { Button } from '../../components/ui/button';
 import { ShoppingBag, IndianRupee, Users, Package, TrendingUp, AlertTriangle } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from 'recharts';
 
@@ -23,9 +24,22 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-display font-bold">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Overview of your store performance.</p>
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-2xl font-display font-bold">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Overview of your store performance.</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/admin/profile">Profile</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/admin/settings">Settings</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/admin/orders">Orders</Link>
+          </Button>
+        </div>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {kpis.map(({ label, value, icon: Icon, tint }) => (

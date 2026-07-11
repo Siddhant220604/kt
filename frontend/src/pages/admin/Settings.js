@@ -21,10 +21,17 @@ export default function AdminSettings() {
     setSaving(true);
     try {
       await api.put('/settings', {
-        business_name: form.business_name, tagline: form.tagline, address: form.address, phone: form.phone,
-        whatsapp: form.whatsapp, email: form.email, upi_id: form.upi_id, upi_qr: form.upi_qr, bank_details: form.bank_details,
-        hours: form.hours, gstin: form.gstin,
-        tax_rate: Number(form.tax_rate || 0), shipping_flat: Number(form.shipping_flat || 0), free_shipping_above: Number(form.free_shipping_above || 0),
+        business_name: form.business_name,
+        tagline: form.tagline,
+        address: form.address,
+        phone: form.phone,
+        whatsapp: form.whatsapp,
+        email: form.email,
+        hours: form.hours,
+        gstin: form.gstin,
+        tax_rate: Number(form.tax_rate || 0),
+        shipping_flat: Number(form.shipping_flat || 0),
+        free_shipping_above: Number(form.free_shipping_above || 0),
       });
       toast.success('Settings saved'); reload();
     } catch (e) { toast.error('Save failed'); }
@@ -52,14 +59,6 @@ export default function AdminSettings() {
           <div><Label>Email</Label><Input value={form.email || ''} onChange={(e) => upd('email', e.target.value)} /></div>
           <div><Label>GSTIN</Label><Input value={form.gstin || ''} onChange={(e) => upd('gstin', e.target.value)} /></div>
           <div className="sm:col-span-2"><Label>Business Hours</Label><Input value={form.hours || ''} onChange={(e) => upd('hours', e.target.value)} /></div>
-        </div>
-      </div>
-      <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
-        <div className="font-display font-semibold">Payments</div>
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div><Label>UPI ID</Label><Input value={form.upi_id || ''} onChange={(e) => upd('upi_id', e.target.value)} placeholder="you@upi" /></div>
-          <div><Label>UPI QR</Label><div className="flex gap-2 items-center">{form.upi_qr && <img src={form.upi_qr} alt="QR" className="h-14 w-14 rounded border" />}<label><input type="file" accept="image/*" className="hidden" onChange={(e) => uploadQR(e.target.files[0])} /><Button asChild variant="outline" size="sm"><span>Upload QR</span></Button></label></div></div>
-          <div className="sm:col-span-2"><Label>Bank Transfer Details</Label><Textarea rows={4} value={form.bank_details || ''} onChange={(e) => upd('bank_details', e.target.value)} /></div>
         </div>
       </div>
       <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
