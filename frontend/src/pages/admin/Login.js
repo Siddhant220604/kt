@@ -45,7 +45,6 @@ export default function AdminLogin() {
           <Button type="submit" disabled={loading} className="w-full gap-2" data-testid="admin-login-submit">
             <LockKeyhole className="h-4 w-4" /> {loading ? 'Signing in...' : 'Sign in'}
           </Button>
-          <div className="text-[11px] text-muted-foreground text-center">Default: admin@kirantraders.com / Admin@123</div>
         </div>
       </form>
     </div>
