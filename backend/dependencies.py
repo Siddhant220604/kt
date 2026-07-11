@@ -6,8 +6,8 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 
-from .auth import decode_access_token
-from .security import get_client_ip
+from auth import decode_access_token
+from security import get_client_ip
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
