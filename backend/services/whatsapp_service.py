@@ -54,8 +54,9 @@ def send_whatsapp_message(
     }
     logger.info('Sending WhatsApp message to %s via %s', to_number, config.api_url)
     logger.info('Request URL: %s', config.api_url)
+    logger.info('HTTP method: POST')
     logger.info('Request JSON payload: %s', data)
-    logger.info('Recipient phone number: %s', to_number)
+    logger.info('Recipient number: %s', to_number)
 
     template_name = None
     language = None

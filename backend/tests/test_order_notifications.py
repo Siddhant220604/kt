@@ -163,7 +163,7 @@ def test_send_whatsapp_logs_response_details(monkeypatch, caplog):
     assert 'Sending WhatsApp message to 919999999999 via https://graph.facebook.com/v23.0/123/messages' in caplog.text
     assert 'Request URL:' in caplog.text
     assert 'Request JSON payload:' in caplog.text
-    assert 'Recipient phone number: 919999999999' in caplog.text
+    assert 'Recipient number: 919999999999' in caplog.text
     assert 'HTTP status code:' in caplog.text
     assert 'Full response JSON:' in caplog.text
     assert 'Message ID: msg-123' in caplog.text
