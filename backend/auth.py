@@ -1,11 +1,19 @@
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
+from dotenv import load_dotenv
 import jwt
 from passlib.context import CryptContext
 
-JWT_SECRET = os.environ['JWT_SECRET']
+package_dir = Path(__file__).resolve().parent
+load_dotenv(package_dir / '.env')
+load_dotenv(package_dir.parent / '.env')
+
+JWT_SECRET = os.environ.get('JWT_SECRET', '')
+if not JWT_SECRET:
+    raise EnvironmentError('JWT_SECRET is not set in the environment or backend/.env')
 JWT_ALGO = 'HS256'
 JWT_EXPIRE_MINUTES = int(os.environ.get('JWT_EXPIRE_MINUTES', '120'))
 

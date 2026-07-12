@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from backend.config.whatsapp import WhatsAppConfig
+from config.whatsapp import WhatsAppConfig
 
 logger = logging.getLogger(__name__)
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')

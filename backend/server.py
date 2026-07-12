@@ -19,9 +19,12 @@ import qrcode
 import smtplib
 import requests
 
-from backend import auth, audit, dependencies, security
-from backend.config.whatsapp import get_whatsapp_config
-from backend.services.whatsapp_service import build_whatsapp_number, send_text_message, send_whatsapp_via_twilio
+import auth
+import audit
+import dependencies
+import security
+from config.whatsapp import get_whatsapp_config
+from services.whatsapp_service import build_whatsapp_number, send_text_message, send_whatsapp_via_twilio
 from email.message import EmailMessage
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
