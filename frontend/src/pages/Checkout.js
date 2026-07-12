@@ -6,12 +6,11 @@ import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
 import { Label } from '../components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import { useCart } from '../lib/cart';
 import { useSettings } from '../lib/settings';
 import { api, formatINR } from '../lib/api';
-import { Truck, Wallet, QrCode, Landmark, Copy, ChevronLeft, ShoppingBag } from 'lucide-react';
+import { Wallet, ChevronLeft, ShoppingBag } from 'lucide-react';
 
 export default function Checkout() {
   const { items, subtotal, clear } = useCart();
@@ -208,39 +207,7 @@ export default function Checkout() {
                     <div className="text-xs text-muted-foreground mt-0.5">Pay securely with UPI, cards, net banking, wallets and EMI via Razorpay.</div>
                   </div>
                 </label>
-                <label className={`flex items-start gap-3 p-4 border rounded-xl cursor-pointer ${payment === 'upi' ? 'border-primary bg-primary/5' : 'border-border'}`}>
-                  <RadioGroupItem value="upi" id="pm-upi" data-testid="payment-upi" />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 font-medium"><QrCode className="h-4 w-4" /> UPI (Manual)</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">Pay to UPI ID <b>{settings.upi_id || 'kirantraders@ybl'}</b>. Send screenshot on WhatsApp.</div>
-                    {payment === 'upi' && (
-                      <Dialog>
-                        <DialogTrigger asChild><Button type="button" size="sm" variant="outline" className="mt-2" data-testid="view-upi-qr">View UPI QR</Button></DialogTrigger>
-                        <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>Scan to Pay</DialogTitle></DialogHeader>
-                          <div className="space-y-3 text-center">
-                            {settings.upi_qr ? <img src={settings.upi_qr} alt="UPI QR" className="w-64 h-64 mx-auto rounded-xl border border-border" /> : <div className="text-sm text-muted-foreground">QR not available</div>}
-                            <div className="text-sm">UPI ID: <b>{settings.upi_id}</b></div>
-                            <Button type="button" variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(settings.upi_id || ''); toast.success('Copied'); }} className="gap-1"><Copy className="h-3.5 w-3.5" />Copy UPI ID</Button>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
-                    )}
-                  </div>
-                </label>
-                <label className={`flex items-start gap-3 p-4 border rounded-xl cursor-pointer ${payment === 'bank_transfer' ? 'border-primary bg-primary/5' : 'border-border'}`}>
-                  <RadioGroupItem value="bank_transfer" id="pm-bank" data-testid="payment-bank" />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 font-medium"><Landmark className="h-4 w-4" /> Bank Transfer / NEFT (Manual)</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">Transfer to our bank account. Send transaction reference to confirm.</div>
-                    {payment === 'bank_transfer' && settings.bank_details && (
-                      <pre className="mt-2 p-3 bg-muted/60 rounded-lg text-xs whitespace-pre-wrap font-mono">{settings.bank_details}</pre>
-                    )}
-                  </div>
-                </label>
               </RadioGroup>
-              <div className="mt-4 text-xs text-muted-foreground bg-muted/40 rounded-lg p-3">
-                <Truck className="h-3.5 w-3.5 inline mr-1" /> For UPI/Bank Transfer orders, we’ll confirm your order after receiving payment. Send screenshot on WhatsApp {settings.whatsapp}.
-              </div>
             </div>
           </div>
           {/* Summary */}
