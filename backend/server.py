@@ -16,7 +16,6 @@ import hmac
 import io
 import base64
 import qrcode
-import smtplib
 import requests
 
 import auth
@@ -24,8 +23,7 @@ import audit
 import dependencies
 import security
 from config.whatsapp import get_whatsapp_config
-from services.whatsapp_service import build_whatsapp_number, send_text_message, send_whatsapp_via_twilio
-from email.message import EmailMessage
+from services.whatsapp_service import build_whatsapp_number, send_text_message
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -41,22 +39,9 @@ db = client[os.environ.get('DB_NAME', 'kiran_traders')]
 
 DEFAULT_BUSINESS_EMAIL = 'kirantraders1996@gmail.com'
 
-MAIL_HOST = os.environ.get('MAIL_HOST', '')
-mail_port_env = os.environ.get('MAIL_PORT', '587')
-MAIL_PORT = int(mail_port_env) if mail_port_env and mail_port_env.strip().isdigit() else 587
-MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'true').lower() in ('1', 'true', 'yes')
-MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'false').lower() in ('1', 'true', 'yes')
-MAIL_USERNAME = os.environ.get('MAIL_USERNAME', '')
-MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD', '')
-MAIL_FROM = os.environ.get('MAIL_FROM', f'Kiran Traders <{DEFAULT_BUSINESS_EMAIL}>')
-MAIL_TO = os.environ.get('MAIL_TO', DEFAULT_BUSINESS_EMAIL)
-
 RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
 RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
 
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
-TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
 WHATSAPP_ACCESS_TOKEN = os.environ.get('WHATSAPP_ACCESS_TOKEN', '')
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '')
@@ -196,7 +181,7 @@ class PaymentVerifyRequest(BaseModel):
     razorpay_signature: str
 
 class OrderStatusUpdate(BaseModel):
-    status: str  # pending | confirmed | packed | shipped | delivered | cancelled
+    status: str  # pending | confirmed | processing | packed | shipped | out for delivery | delivered | cancelled
     tracking_note: Optional[str] = ''
 
 class TrackOrderRequest(BaseModel):
@@ -774,7 +759,7 @@ async def get_order(oid: str, _: Dict = Depends(require_admin)):
 
 @api_router.put('/orders/{oid}/status')
 async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
-    valid = ['pending', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled']
+    valid = ['pending', 'confirmed', 'processing', 'packed', 'shipped', 'out for delivery', 'delivered', 'cancelled']
     if upd.status not in valid:
         raise HTTPException(status_code=400, detail='Invalid status')
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
@@ -912,79 +897,6 @@ async def delete_review(rid: str, request: Request, payload: Dict = Depends(requ
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_review', rid)
     return {'ok': True}
 
-# ------------------ CONTACTS ------------------
-
-def send_contact_email(contact: Dict[str, Any]) -> None:
-    if not MAIL_HOST or not MAIL_USERNAME or not MAIL_PASSWORD or not MAIL_TO:
-        logger.warning('SMTP email not sent: missing MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD, or MAIL_TO configuration')
-        return
-
-    msg = EmailMessage()
-    subject = contact.get('subject') or 'New contact message from website'
-    msg['Subject'] = f'Contact inquiry: {subject}'
-    msg['From'] = MAIL_FROM
-    msg['To'] = MAIL_TO
-    if contact.get('email'):
-        msg['Reply-To'] = contact['email']
-
-    lines = [
-        f"Name: {contact.get('name', '')}",
-        f"Mobile: {contact.get('mobile', '')}",
-        f"Email: {contact.get('email', '')}",
-        f"Subject: {contact.get('subject', '')}",
-        '',
-        'Message:',
-        contact.get('message', ''),
-        '',
-        f"Received: {contact.get('created_at', '')}",
-    ]
-    msg.set_content('\n'.join(lines))
-
-    try:
-        logger.info('Connecting to SMTP host...')
-        if MAIL_USE_SSL:
-            smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=15)
-        else:
-            smtp = smtplib.SMTP(MAIL_HOST, MAIL_PORT, timeout=15)
-        logger.info('Connected successfully')
-        with smtp:
-            logger.info('Starting TLS...')
-            if MAIL_USE_TLS and not MAIL_USE_SSL:
-                smtp.starttls()
-                smtp.ehlo()
-            logger.info('TLS started')
-            logger.info('Logging in...')
-            smtp.login(MAIL_USERNAME, MAIL_PASSWORD)
-            logger.info('Logged in successfully')
-            logger.info('Sending email...')
-            smtp.send_message(msg)
-            logger.info('Email sent successfully')
-        logger.info('Contact email sent to %s', MAIL_TO)
-    except Exception:
-        logger.exception('Failed to send contact email')
-
-
-def send_whatsapp_via_twilio(mobile: str, body: str) -> None:
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_FROM:
-        raise ValueError('Twilio WhatsApp credentials not configured')
-    try:
-        resp = requests.post(
-            f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json',
-            data={
-                'To': f'whatsapp:+{mobile.lstrip("+") if mobile else mobile}',
-                'From': TWILIO_WHATSAPP_FROM,
-                'Body': body,
-            },
-            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-            timeout=15,
-        )
-        resp.raise_for_status()
-        logger.info('WhatsApp message sent via Twilio to %s', mobile)
-    except Exception:
-        logger.exception('Twilio WhatsApp delivery failed')
-        raise
-
-
 def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
     address = order.get('address') or {}
     mobile = str(address.get('mobile') or '').strip()
@@ -1006,17 +918,18 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
         item_summary += ' ...'
 
     msg_body = (
-        f"Hi {address.get('name') or 'Customer'}, your order {order_id} with {business_name} is confirmed. "
+        f"Hi {address.get('name') or 'Customer'}, your order {order_id} with {business_name} has been received. "
         f"Total ₹{total:.2f}. Items: {item_summary or 'See order details'}. "
-        "We will update you once your order ships."
+        "We will send you updates as your order is processed."
     )
 
     config = get_whatsapp_config()
+    if not config.is_valid:
+        logger.warning('WhatsApp Cloud API not configured; order notification skipped for order %s', order_id)
+        return
+
     try:
-        if config.is_valid:
-            send_text_message(config, phone, msg_body)
-        else:
-            send_whatsapp_via_twilio(phone, msg_body)
+        send_text_message(config, phone, msg_body)
     except Exception as exc:
         logger.error('Failed to send WhatsApp order notification for order %s: %s', order_id, exc)
 
@@ -1036,166 +949,17 @@ def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settin
     )
 
     config = get_whatsapp_config()
+    if not config.is_valid:
+        logger.warning('WhatsApp Cloud API not configured; status update skipped for order %s', order_id)
+        return
+
     try:
-        if config.is_valid:
-            send_text_message(config, phone, msg_body)
-        else:
-            send_whatsapp_via_twilio(phone, msg_body)
+        send_text_message(config, phone, msg_body)
     except Exception as exc:
         logger.error('Failed to send status update WhatsApp notification for order %s: %s', order_id, exc)
 
 
 def send_order_notification(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
-    if not MAIL_HOST or not MAIL_USERNAME or not MAIL_PASSWORD:
-        logger.warning('SMTP email not sent: missing MAIL_HOST, MAIL_USERNAME, or MAIL_PASSWORD configuration')
-    else:
-        address = order.get('address') or {}
-        recipient = (address.get('email') or '').strip()
-        if not recipient:
-            logger.info('Order notification skipped: no customer email provided for order %s', order.get('id'))
-        else:
-            business_name = (settings or {}).get('business_name') or 'Kiran Traders'
-            order_id = order.get('id') or order.get('order_number') or 'N/A'
-            total = order.get('total') or 0
-            items = order.get('items') or []
-
-            msg = EmailMessage()
-            msg['Subject'] = f'Order confirmed | {order_id}'
-            msg['From'] = MAIL_FROM
-            msg['To'] = recipient
-            msg['Reply-To'] = MAIL_FROM
-            msg['X-Mailer'] = 'Kiran Traders Order System'
-
-            customer_name = address.get('name') or 'Customer'
-            payment_method = order.get('payment_method', 'Pending').replace('_', ' ').title()
-            order_date = order.get('created_at', '')[:10] or datetime.now(timezone.utc).strftime('%Y-%m-%d')
-            address_lines = [
-                address.get('name', ''),
-                address.get('address_line1', ''),
-                address.get('address_line2', ''),
-                f"{address.get('city', '')}, {address.get('state', '')} {address.get('pincode', '')}".strip(', '),
-                f"Mobile: {address.get('mobile', '')}",
-                f"Email: {address.get('email', '')}",
-            ]
-            address_lines = [line for line in address_lines if line]
-
-            plain_lines = [
-                f'Dear {customer_name},',
-                '',
-                f'Thank you for your order from {business_name}.',
-                f'Order ID: {order_id}',
-                f'Date: {order_date}',
-                f'Payment method: {payment_method}',
-                '',
-                'Delivery address:',
-                *address_lines,
-                '',
-                'Order summary:',
-            ]
-            for item in items:
-                name = item.get('name', 'Item')
-                qty = item.get('quantity', 1)
-                price = item.get('price', 0)
-                plain_lines.append(f'- {name} x{qty} @ Rs.{price:.2f}')
-            plain_lines.extend([
-                '',
-                f'Subtotal: Rs.{order.get("subtotal", 0):.2f}',
-                f'Discount: Rs.{order.get("discount", 0):.2f}',
-                f'Tax: Rs.{order.get("tax", 0):.2f}',
-                f'Shipping: Rs.{order.get("shipping", 0):.2f}',
-                f'Total: Rs.{total:.2f}',
-                '',
-                'Please find your invoice attached to this email.',
-                '',
-                'We will update you as your order moves through processing.',
-                '',
-                'Warm regards,',
-                business_name,
-            ])
-            msg.set_content('\n'.join(plain_lines))
-
-            if str(MAIL_HOST).lower() != 'smtp.example.com':
-                html_items = ''.join(
-                    f'<tr>'
-                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3;">{item.get("name", "Item")}</td>'
-                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3; text-align:center;">{item.get("quantity", 1)}</td>'
-                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3; text-align:right;">Rs.{item.get("price", 0):.2f}</td>'
-                    f'<td style="padding: 8px 12px; border: 1px solid #e0d4c3; text-align:right;">Rs.{item.get("total", 0):.2f}</td>'
-                    f'</tr>'
-                    for item in items
-                )
-                html_address = ''.join(f'<p style="margin:2px 0;">{line}</p>' for line in address_lines)
-                html_body = f"""
-                <html>
-                  <body style="font-family: Arial, sans-serif; color: #222; line-height: 1.5;">
-                    <div style="max-width: 680px; margin: 0 auto; padding: 24px; background: #faf7f2; border: 1px solid #e6ddd4;">
-                      <h1 style="margin-bottom: 0; font-size: 26px; color: #5a3820;">Order Confirmed</h1>
-                      <p style="margin-top: 4px; color: #5a3820;">Thank you for shopping with {business_name}.</p>
-                      <hr style="border:none; border-top:1px solid #e0d4c3; margin: 24px 0;" />
-                      <p><strong>Order ID:</strong> {order_id}<br />
-                      <strong>Date:</strong> {order_date}<br />
-                      <strong>Payment:</strong> {payment_method}</p>
-                      <h2 style="font-size: 18px; margin-bottom: 8px;">Delivery Address</h2>
-                      <div style="padding: 12px; background: #fff; border: 1px solid #e0d4c3; margin-bottom: 16px;">{html_address}</div>
-                      <h2 style="font-size: 18px; margin-bottom: 8px;">Order Summary</h2>
-                      <table style="border-collapse: collapse; width: 100%; background: #fff;">
-                        <thead>
-                          <tr>
-                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:left;">Product</th>
-                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:center;">Qty</th>
-                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:right;">Rate</th>
-                            <th style="padding: 10px 12px; border: 1px solid #e0d4c3; background: #f0ece5; text-align:right;">Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {html_items}
-                        </tbody>
-                      </table>
-                      <div style="margin-top: 16px; padding: 16px; background: #fff; border: 1px solid #e0d4c3;">
-                        <p style="margin: 4px 0;"><strong>Subtotal:</strong> Rs.{order.get('subtotal', 0):.2f}</p>
-                        <p style="margin: 4px 0;"><strong>Discount:</strong> Rs.{order.get('discount', 0):.2f}</p>
-                        <p style="margin: 4px 0;"><strong>GST:</strong> Rs.{order.get('tax', 0):.2f}</p>
-                        <p style="margin: 4px 0;"><strong>Shipping:</strong> Rs.{order.get('shipping', 0):.2f}</p>
-                        <p style="margin: 10px 0 0; font-size: 16px; font-weight: bold;"><strong>Total:</strong> Rs.{total:.2f}</p>
-                      </div>
-                      <p style="margin-top: 20px;">Your digital invoice is attached to this email. Please keep it for your records.</p>
-                      <p style="margin-top: 20px;">We will update you as your order moves through processing.</p>
-                      <p style="margin-top: 32px;">Warm regards,<br />{business_name}</p>
-                    </div>
-                  </body>
-                </html>
-                """
-                msg.add_alternative(html_body, subtype='html')
-
-                try:
-                    invoice_pdf = build_invoice_pdf(order, settings or {})
-                    msg.add_attachment(invoice_pdf, maintype='application', subtype='pdf', filename=f'invoice-{order_id}.pdf')
-                except Exception as exc:
-                    logger.error('Failed to attach invoice PDF: %s', exc)
-
-            try:
-                logger.info('Connecting to SMTP host...')
-                if MAIL_USE_SSL:
-                    smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=15)
-                else:
-                    smtp = smtplib.SMTP(MAIL_HOST, MAIL_PORT, timeout=15)
-                logger.info('Connected successfully')
-                with smtp:
-                    logger.info('Starting TLS...')
-                    if MAIL_USE_TLS and not MAIL_USE_SSL:
-                        smtp.starttls()
-                        smtp.ehlo()
-                    logger.info('TLS started')
-                    logger.info('Logging in...')
-                    smtp.login(MAIL_USERNAME, MAIL_PASSWORD)
-                    logger.info('Logged in successfully')
-                    logger.info('Sending email...')
-                    smtp.send_message(msg)
-                    logger.info('Email sent successfully')
-                logger.info('Order confirmation email sent to %s for order %s', recipient, order_id)
-            except Exception:
-                logger.exception('Failed to send order notification email')
-
     send_order_whatsapp(order, settings)
 
 
@@ -1206,7 +970,6 @@ async def contact_submit(c: ContactIn, background_tasks: BackgroundTasks):
     doc['created_at'] = now_iso()
     doc['read'] = False
     await db.contacts.insert_one(doc)
-    background_tasks.add_task(send_contact_email, doc)
     doc.pop('_id', None)
     return doc
 
@@ -1284,10 +1047,11 @@ async def send_order_whatsapp_message(
 
     try:
         config = get_whatsapp_config()
-        if config.is_valid:
-            send_text_message(config, phone, body.message.strip())
-        else:
-            send_whatsapp_via_twilio(phone, body.message.strip())
+        if not config.is_valid:
+            raise HTTPException(status_code=502, detail='WhatsApp Cloud API is not configured')
+        send_text_message(config, phone, body.message.strip())
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception('Manual WhatsApp send failed for order %s', oid)
         raise HTTPException(status_code=502, detail='Failed to send WhatsApp message')

@@ -7,23 +7,22 @@ import requests
 from config.whatsapp import WhatsAppConfig
 
 logger = logging.getLogger(__name__)
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
-TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
 
 
 def build_whatsapp_number(mobile: str, default_country_code: str) -> str:
     raw = mobile or ''
-    normalized = ''.join(ch for ch in raw if ch.isdigit() or ch == '+')
-    if not normalized:
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    if not digits:
         return ''
-    if normalized.startswith('+'):
-        return normalized
-    normalized = normalized.lstrip('0')
-    if normalized.startswith(default_country_code.lstrip('+')):
-        return f'+{normalized}'
-    return f'{default_country_code}{normalized}'
+
+    # Remove leading zeros that may be present in local formatting
+    digits = digits.lstrip('0')
+    if len(digits) == 10:
+        digits = default_country_code.lstrip('+') + digits
+    if len(digits) < 10 or len(digits) > 15:
+        return ''
+    return digits
 
 
 def send_whatsapp_message(
@@ -34,7 +33,15 @@ def send_whatsapp_message(
 ) -> Dict[str, Any]:
     if not config.is_valid:
         raise ValueError('WhatsApp configuration is incomplete')
-    to_number = to_number.lstrip('+')
+
+    normalized_number = ''.join(ch for ch in to_number if ch.isdigit())
+    if len(normalized_number) == 10:
+        normalized_number = config.default_country_code.lstrip('+') + normalized_number
+    if not normalized_number or len(normalized_number) < 10 or len(normalized_number) > 15:
+        logger.warning('Invalid WhatsApp phone number after normalization: %s; message not sent', normalized_number)
+        return {}
+
+    to_number = normalized_number
     headers = {
         'Authorization': f'Bearer {config.access_token}',
         'Content-Type': 'application/json',
@@ -57,28 +64,6 @@ def send_whatsapp_message(
 
 def send_text_message(config: WhatsAppConfig, to_number: str, text: str) -> Dict[str, Any]:
     return send_whatsapp_message(config, to_number, 'text', {'text': {'body': text}})
-
-
-def send_whatsapp_via_twilio(to_number: str, body: str) -> Dict[str, Any]:
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_FROM:
-        raise ValueError('Twilio WhatsApp credentials are not configured')
-    payload = {
-        'To': f'whatsapp:{to_number}',
-        'From': TWILIO_WHATSAPP_FROM,
-        'Body': body,
-    }
-    resp = requests.post(
-        f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json',
-        data=payload,
-        auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-        timeout=15,
-    )
-    try:
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        logger.exception('Twilio WhatsApp API request failed: %s', exc)
-        raise
-    return resp.json()
 
 
 def send_template_message(config: WhatsAppConfig, to_number: str, template_name: str, language_code: str, components: Optional[list] = None) -> Dict[str, Any]:

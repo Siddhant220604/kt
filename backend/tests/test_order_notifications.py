@@ -9,48 +9,30 @@ os.environ.setdefault('MONGO_URL', 'mongodb://localhost:27017')
 import server
 
 
-def test_send_order_notification_sends_customer_email(monkeypatch):
-    monkeypatch.setattr(server, 'MAIL_HOST', 'smtp.example.com')
-    monkeypatch.setattr(server, 'MAIL_PORT', 587)
-    monkeypatch.setattr(server, 'MAIL_USE_TLS', True)
-    monkeypatch.setattr(server, 'MAIL_USE_SSL', False)
-    monkeypatch.setattr(server, 'MAIL_USERNAME', 'user')
-    monkeypatch.setattr(server, 'MAIL_PASSWORD', 'pass')
-    monkeypatch.setattr(server, 'MAIL_FROM', 'Kiran Traders <shop@example.com>')
+def test_send_order_notification_sends_whatsapp(monkeypatch):
+    sent = {}
 
-    sent_messages = []
+    class DummyConfig:
+        is_valid = True
+        access_token = 'token'
+        api_url = 'https://graph.facebook.com/v23.0/123/messages'
 
-    class DummySMTP:
-        def __init__(self, *args, **kwargs):
-            pass
+    def fake_get_whatsapp_config():
+        return DummyConfig()
 
-        def __enter__(self):
-            return self
+    def fake_send_text_message(config, to_number, text):
+        sent['to_number'] = to_number
+        sent['text'] = text
+        return {'messages': [{'id': 'msgid'}]}
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def ehlo(self):
-            return None
-
-        def starttls(self):
-            return None
-
-        def login(self, username, password):
-            return None
-
-        def send_message(self, msg):
-            sent_messages.append(msg)
-
-    monkeypatch.setattr(server.smtplib, 'SMTP', DummySMTP)
-    monkeypatch.setattr(server.smtplib, 'SMTP_SSL', DummySMTP)
+    monkeypatch.setattr(server, 'get_whatsapp_config', fake_get_whatsapp_config)
+    monkeypatch.setattr(server, 'send_text_message', fake_send_text_message)
 
     order = {
         'id': 'KT20260708ABC123',
         'total': 499.0,
         'address': {
             'name': 'Alice',
-            'email': 'alice@example.com',
             'mobile': '9999999999',
         },
         'items': [
@@ -60,30 +42,29 @@ def test_send_order_notification_sends_customer_email(monkeypatch):
 
     server.send_order_notification(order, {'business_name': 'Kiran Traders'})
 
-    assert len(sent_messages) == 1
-    msg = sent_messages[0]
-    assert msg['To'] == 'alice@example.com'
-    assert 'Order confirmed' in msg['Subject']
-    assert 'KT20260708ABC123' in msg.get_content()
+    assert sent['to_number'] == '919999999999'
+    assert 'KT20260708ABC123' in sent['text']
+    assert 'has been received' in sent['text']
 
 
 def test_send_order_whatsapp_sends_message(monkeypatch):
-    monkeypatch.setattr(server, 'TWILIO_ACCOUNT_SID', 'AC123')
-    monkeypatch.setattr(server, 'TWILIO_AUTH_TOKEN', 'token')
-    monkeypatch.setattr(server, 'TWILIO_WHATSAPP_FROM', '+14155238886')
-    monkeypatch.setattr(server, 'WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
+    sent = {}
 
-    posted = []
+    class DummyConfig:
+        is_valid = True
+        access_token = 'token'
+        api_url = 'https://graph.facebook.com/v23.0/123/messages'
 
-    class DummyResponse:
-        def raise_for_status(self):
-            return None
+    def fake_get_whatsapp_config():
+        return DummyConfig()
 
-    def fake_post(url, data, auth, timeout):
-        posted.append((url, data, auth, timeout))
-        return DummyResponse()
+    def fake_send_text_message(config, to_number, text):
+        sent['to_number'] = to_number
+        sent['text'] = text
+        return {'messages': [{'id': 'msgid'}]}
 
-    monkeypatch.setattr(server.requests, 'post', fake_post)
+    monkeypatch.setattr(server, 'get_whatsapp_config', fake_get_whatsapp_config)
+    monkeypatch.setattr(server, 'send_text_message', fake_send_text_message)
 
     order = {
         'id': 'KT20260708ABC123',
@@ -99,10 +80,47 @@ def test_send_order_whatsapp_sends_message(monkeypatch):
 
     server.send_order_whatsapp(order, {'business_name': 'Kiran Traders'})
 
-    assert len(posted) == 1
-    url, data, auth, timeout = posted[0]
-    assert 'Messages.json' in url
-    assert data['To'] == 'whatsapp:+919999999999'
-    assert 'KT20260708ABC123' in data['Body']
-    assert auth == ('AC123', 'token')
-    assert timeout == 15
+    assert sent['to_number'] == '919999999999'
+    assert 'KT20260708ABC123' in sent['text']
+    assert 'has been received' in sent['text']
+
+
+def test_send_order_status_update_whatsapp_sends_message(monkeypatch):
+    sent = {}
+
+    class DummyConfig:
+        is_valid = True
+        access_token = 'token'
+        api_url = 'https://graph.facebook.com/v23.0/123/messages'
+
+    def fake_get_whatsapp_config():
+        return DummyConfig()
+
+    def fake_send_text_message(config, to_number, text):
+        sent['to_number'] = to_number
+        sent['text'] = text
+        return {'messages': [{'id': 'msgid'}]}
+
+    monkeypatch.setattr(server, 'get_whatsapp_config', fake_get_whatsapp_config)
+    monkeypatch.setattr(server, 'send_text_message', fake_send_text_message)
+
+    order = {
+        'id': 'KT20260708ABC123',
+        'address': {
+            'name': 'Alice',
+            'mobile': '9999999999',
+        },
+    }
+
+    server.send_order_status_update_whatsapp(order, 'processing', {'business_name': 'Kiran Traders'})
+
+    assert sent['to_number'] == '919999999999'
+    assert 'now Processing' in sent['text']
+
+
+def test_build_whatsapp_number_normalizes_to_e164():
+    assert server.build_whatsapp_number('99999 99999', '+91') == '919999999999'
+    assert server.build_whatsapp_number('+91-99999-99999', '+91') == '919999999999'
+    assert server.build_whatsapp_number('(999)999-9999', '+91') == '919999999999'
+    assert server.build_whatsapp_number('00919999999999', '+91') == '919999999999'
+    assert server.build_whatsapp_number('12345', '+91') == ''
