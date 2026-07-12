@@ -53,13 +53,35 @@ def send_whatsapp_message(
         **payload,
     }
     logger.info('Sending WhatsApp message to %s via %s', to_number, config.api_url)
-    resp = requests.post(config.api_url, headers=headers, json=data, timeout=15)
+    try:
+        resp = requests.post(config.api_url, headers=headers, json=data, timeout=15)
+    except requests.RequestException as exc:
+        logger.exception('WhatsApp API request failed for %s', to_number)
+        logger.error('Response text: N/A')
+        raise
+
+    logger.info('Status Code: %s', resp.status_code)
+    logger.info('Response:')
+    logger.info('%s', resp.text)
+
     try:
         resp.raise_for_status()
     except requests.RequestException as exc:
-        logger.exception('WhatsApp API request failed: %s', exc)
+        logger.exception('WhatsApp API request failed for %s', to_number)
+        logger.error('Response text: %s', resp.text)
         raise
-    return resp.json()
+
+    response_payload = resp.json()
+    message_id = None
+    try:
+        message_id = response_payload.get('messages', [{}])[0].get('id')
+    except (AttributeError, IndexError, TypeError):
+        message_id = None
+
+    if message_id:
+        logger.info('Returned message ID: %s', message_id)
+
+    return response_payload
 
 
 def send_text_message(config: WhatsAppConfig, to_number: str, text: str) -> Dict[str, Any]:
