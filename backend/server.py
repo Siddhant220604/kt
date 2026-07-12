@@ -23,6 +23,8 @@ import auth
 import audit
 import dependencies
 import security
+from backend.config.whatsapp import get_whatsapp_config
+from backend.services.whatsapp_service import build_whatsapp_number, send_text_message, send_whatsapp_via_twilio
 from email.message import EmailMessage
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -56,6 +58,10 @@ TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
+WHATSAPP_ACCESS_TOKEN = os.environ.get('WHATSAPP_ACCESS_TOKEN', '')
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '')
+WHATSAPP_VERIFY_TOKEN = os.environ.get('WHATSAPP_VERIFY_TOKEN', '')
+WHATSAPP_API_VERSION = os.environ.get('WHATSAPP_API_VERSION', 'v23.0')
 
 app = FastAPI(title="Kiran Traders API")
 api_router = APIRouter(prefix="/api")
@@ -196,6 +202,10 @@ class OrderStatusUpdate(BaseModel):
 class TrackOrderRequest(BaseModel):
     order_id: str
     mobile: str
+
+class WhatsAppMessageIn(BaseModel):
+    message: str
+    mobile: Optional[str] = None
 
 class CouponIn(BaseModel):
     code: str
@@ -763,7 +773,7 @@ async def get_order(oid: str, _: Dict = Depends(require_admin)):
     return o
 
 @api_router.put('/orders/{oid}/status')
-async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, payload: Dict = Depends(require_admin)):
+async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
     valid = ['pending', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled']
     if upd.status not in valid:
         raise HTTPException(status_code=400, detail='Invalid status')
@@ -773,8 +783,11 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
     hist = o.get('status_history', [])
     hist.append({'status': upd.status, 'at': now_iso(), 'note': upd.tracking_note or ''})
     await db.orders.update_one({'id': oid}, {'$set': {'status': upd.status, 'status_history': hist, 'updated_at': now_iso()}})
+    updated = await db.orders.find_one({'id': oid}, {'_id': 0})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_order_status', oid, {'status': upd.status})
-    return await db.orders.find_one({'id': oid}, {'_id': 0})
+    settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    background_tasks.add_task(send_order_status_update_whatsapp, updated, upd.status, settings)
+    return updated
 
 @api_router.get('/orders/{oid}/invoice')
 async def order_invoice(oid: str, mobile: Optional[str] = None):
@@ -951,24 +964,38 @@ def send_contact_email(contact: Dict[str, Any]) -> None:
         logger.exception('Failed to send contact email')
 
 
-def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
+def send_whatsapp_via_twilio(mobile: str, body: str) -> None:
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_FROM:
-        logger.info('WhatsApp order notification skipped: Twilio credentials not configured')
-        return
+        raise ValueError('Twilio WhatsApp credentials not configured')
+    try:
+        resp = requests.post(
+            f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json',
+            data={
+                'To': f'whatsapp:+{mobile.lstrip("+") if mobile else mobile}',
+                'From': TWILIO_WHATSAPP_FROM,
+                'Body': body,
+            },
+            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            timeout=15,
+        )
+        resp.raise_for_status()
+        logger.info('WhatsApp message sent via Twilio to %s', mobile)
+    except Exception:
+        logger.exception('Twilio WhatsApp delivery failed')
+        raise
 
+
+def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
     address = order.get('address') or {}
     mobile = str(address.get('mobile') or '').strip()
     if not mobile:
         logger.info('WhatsApp order notification skipped: no customer mobile number for order %s', order.get('id'))
         return
 
-    mobile = mobile.lstrip('+')
-    if not mobile.isdigit():
+    phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
+    if not phone:
         logger.info('WhatsApp order notification skipped: invalid mobile number for order %s', order.get('id'))
         return
-
-    if not mobile.startswith('91') and WHATSAPP_DEFAULT_COUNTRY_CODE:
-        mobile = f"{WHATSAPP_DEFAULT_COUNTRY_CODE.lstrip('+')}{mobile}"
 
     order_id = order.get('id') or order.get('order_number') or 'N/A'
     business_name = (settings or {}).get('business_name') or 'Kiran Traders'
@@ -979,24 +1006,43 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
         item_summary += ' ...'
 
     msg_body = (
-        f"Hi {address.get('name') or 'Customer'}! Your order {order_id} with {business_name} is confirmed. "
-        f"Total: Rs.{total:.2f}. Items: {item_summary or 'See order details'}."
+        f"Hi {address.get('name') or 'Customer'}, your order {order_id} with {business_name} is confirmed. "
+        f"Total ₹{total:.2f}. Items: {item_summary or 'See order details'}. "
+        "We will update you once your order ships."
     )
 
+    config = get_whatsapp_config()
     try:
-        requests.post(
-            'https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json'.format(sid=TWILIO_ACCOUNT_SID),
-            data={
-                'To': f'whatsapp:+{mobile}',
-                'From': TWILIO_WHATSAPP_FROM,
-                'Body': msg_body,
-            },
-            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-            timeout=15,
-        ).raise_for_status()
-        logger.info('WhatsApp order confirmation sent to %s for order %s', mobile, order_id)
+        if config.is_valid:
+            send_text_message(config, phone, msg_body)
+        else:
+            send_whatsapp_via_twilio(phone, msg_body)
     except Exception as exc:
-        logger.error('Failed to send WhatsApp order notification: %s', exc)
+        logger.error('Failed to send WhatsApp order notification for order %s: %s', order_id, exc)
+
+
+def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settings: Optional[Dict[str, Any]] = None) -> None:
+    address = order.get('address') or {}
+    phone = build_whatsapp_number(str(address.get('mobile') or '').strip(), WHATSAPP_DEFAULT_COUNTRY_CODE)
+    if not phone:
+        logger.info('WhatsApp status update skipped: no valid mobile for order %s', order.get('id'))
+        return
+
+    order_id = order.get('id') or 'N/A'
+    business_name = (settings or {}).get('business_name') or 'Kiran Traders'
+    msg_body = (
+        f"Hi {address.get('name') or 'Customer'}, your order {order_id} with {business_name} is now {status.title()}. "
+        "Thank you for shopping with us."
+    )
+
+    config = get_whatsapp_config()
+    try:
+        if config.is_valid:
+            send_text_message(config, phone, msg_body)
+        else:
+            send_whatsapp_via_twilio(phone, msg_body)
+    except Exception as exc:
+        logger.error('Failed to send status update WhatsApp notification for order %s: %s', order_id, exc)
 
 
 def send_order_notification(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
@@ -1198,6 +1244,56 @@ async def update_settings(s: SettingsIn, request: Request, payload: Dict = Depen
     await db.settings.update_one({'id': 'main'}, {'$set': doc}, upsert=True)
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_settings', 'main')
     return await db.settings.find_one({'id': 'main'}, {'_id': 0})
+
+@api_router.get('/webhooks/whatsapp')
+async def verify_whatsapp_webhook(request: Request):
+    params = request.query_params
+    mode = params.get('hub.mode') or params.get('mode')
+    challenge = params.get('hub.challenge') or params.get('challenge')
+    verify_token = params.get('hub.verify_token') or params.get('verify_token')
+    config = get_whatsapp_config()
+    if mode == 'subscribe' and verify_token == config.verify_token:
+        return Response(content=challenge or '', media_type='text/plain')
+    raise HTTPException(status_code=403, detail='Invalid verification token')
+
+@api_router.post('/webhooks/whatsapp')
+async def handle_whatsapp_webhook(payload: Dict[str, Any], request: Request):
+    logger.info('WhatsApp webhook event received: %s', payload)
+    return {'status': 'received'}
+
+@api_router.post('/orders/{oid}/whatsapp')
+async def send_order_whatsapp_message(
+    oid: str,
+    body: WhatsAppMessageIn,
+    request: Request,
+    payload: Dict = Depends(require_admin),
+):
+    if not body.message or not body.message.strip():
+        raise HTTPException(status_code=400, detail='Message text is required')
+    order = await db.orders.find_one({'id': oid}, {'_id': 0})
+    if not order:
+        raise HTTPException(status_code=404, detail='Order not found')
+
+    mobile = body.mobile.strip() if body.mobile else str(order.get('address', {}).get('mobile', '')).strip()
+    if not mobile:
+        raise HTTPException(status_code=400, detail='Mobile number is required')
+
+    phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
+    if not phone:
+        raise HTTPException(status_code=400, detail='Unable to parse mobile number')
+
+    try:
+        config = get_whatsapp_config()
+        if config.is_valid:
+            send_text_message(config, phone, body.message.strip())
+        else:
+            send_whatsapp_via_twilio(phone, body.message.strip())
+    except Exception as exc:
+        logger.exception('Manual WhatsApp send failed for order %s', oid)
+        raise HTTPException(status_code=502, detail='Failed to send WhatsApp message')
+
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'send_whatsapp', oid, {'mobile': mobile})
+    return {'ok': True}
 
 # ------------------ ADMIN STATS ------------------
 
