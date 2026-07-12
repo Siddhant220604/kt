@@ -25,7 +25,11 @@ export default function AdminCategories() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
-  const del = async (c) => { if (!window.confirm(`Delete "${c.name}"?`)) return; await api.delete(`/categories/${c.id}`); toast.success('Deleted'); load(); };
+  const del = async (c) => {
+    if (!window.confirm(`Delete "${c.name}"?`)) return;
+    try { await api.delete(`/categories/${c.id}`); toast.success('Deleted'); load(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed to delete category'); }
+  };
 
   return (
     <div className="space-y-4">

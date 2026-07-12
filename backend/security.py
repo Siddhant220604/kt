@@ -36,4 +36,7 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'no-referrer'
+        # Harmless to send over plain HTTP (browsers only honor it on responses actually
+        # received over HTTPS), so no need to gate on request scheme.
+        response.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains'
         return response

@@ -2,11 +2,12 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, status, B
 from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
 from typing import List, Optional, Any, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -16,6 +17,7 @@ import hashlib
 import hmac
 import io
 import base64
+import time
 import qrcode
 import requests
 
@@ -39,6 +41,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'kiran_traders')]
 
 DEFAULT_BUSINESS_EMAIL = 'kirantraders1996@gmail.com'
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://kirantraders.vercel.app').rstrip('/')
 
 RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
 RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
@@ -66,6 +69,28 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+# Small in-process TTL cache for read-heavy public endpoints (settings/categories/banners
+# are fetched on nearly every page load). Explicitly invalidated by the relevant admin
+# mutations below rather than relying on TTL alone, so edits show up immediately.
+_cache: Dict[str, tuple] = {}
+CACHE_TTL_SECONDS = 30
+
+
+def cache_get(key: str) -> Any:
+    entry = _cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    return None
+
+
+def cache_set(key: str, value: Any, ttl: int = CACHE_TTL_SECONDS) -> None:
+    _cache[key] = (time.monotonic() + ttl, value)
+
+
+def cache_invalidate(*keys: str) -> None:
+    for k in keys:
+        _cache.pop(k, None)
 
 def serialize_doc(doc: Any) -> Any:
     if doc is None:
@@ -147,6 +172,21 @@ class ProductIn(BaseModel):
     active: bool = True
     tags: List[str] = []
 
+    @field_validator('images')
+    @classmethod
+    def validate_images(cls, images: List[str]) -> List[str]:
+        if len(images) > 10:
+            raise ValueError('A product can have at most 10 images')
+        # Base64 data-URI uploads only - a ~2MB decoded image is roughly this many
+        # base64 characters. Plain image URLs (http/https) are always far shorter and
+        # pass through untouched; the frontend already caps uploads at 1MB client-side,
+        # this is the server-side backstop for direct API callers.
+        max_data_uri_chars = 2_800_000
+        for img in images:
+            if img.startswith('data:') and len(img) > max_data_uri_chars:
+                raise ValueError('Each product image must be under ~2MB')
+        return images
+
 class CartItem(BaseModel):
     product_id: str
     name: str
@@ -158,23 +198,23 @@ class CartItem(BaseModel):
     moq: int = 1
 
 class AddressIn(BaseModel):
-    name: str
-    mobile: str
+    name: str = Field(min_length=1, max_length=200)
+    mobile: str = Field(min_length=1, max_length=20)
     email: EmailStr
-    address_line1: str
-    address_line2: Optional[str] = ''
-    city: str
-    state: str
-    pincode: str
-    landmark: Optional[str] = ''
-    gst_number: Optional[str] = ''
+    address_line1: str = Field(min_length=1, max_length=300)
+    address_line2: Optional[str] = Field('', max_length=300)
+    city: str = Field(min_length=1, max_length=100)
+    state: str = Field(min_length=1, max_length=100)
+    pincode: str = Field(min_length=1, max_length=10)
+    landmark: Optional[str] = Field('', max_length=200)
+    gst_number: Optional[str] = Field('', max_length=20)
 
 class OrderIn(BaseModel):
     items: List[CartItem]
     address: AddressIn
     payment_method: str  # cod | upi | bank_transfer | online
-    notes: Optional[str] = ''
-    coupon_code: Optional[str] = ''
+    notes: Optional[str] = Field('', max_length=1000)
+    coupon_code: Optional[str] = Field('', max_length=50)
 
 class PaymentCreateOrderRequest(BaseModel):
     order_id: str
@@ -193,8 +233,8 @@ class OrderStatusUpdate(BaseModel):
     tracking_note: Optional[str] = ''
 
 class TrackOrderRequest(BaseModel):
-    order_id: str
-    mobile: str
+    order_id: str = Field(min_length=1, max_length=50)
+    mobile: str = Field(min_length=1, max_length=20)
 
 class WhatsAppMessageIn(BaseModel):
     message: str
@@ -211,7 +251,7 @@ class CouponIn(BaseModel):
     usage_limit: int = 0
 
 class CouponValidate(BaseModel):
-    code: str
+    code: str = Field(max_length=50)
     subtotal: float
 
 class BannerIn(BaseModel):
@@ -225,18 +265,18 @@ class BannerIn(BaseModel):
 
 class ReviewIn(BaseModel):
     product_id: str
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     rating: int
-    title: Optional[str] = ''
-    comment: str
+    title: Optional[str] = Field('', max_length=300)
+    comment: str = Field(min_length=1, max_length=3000)
     order_id: Optional[str] = ''
 
 class ContactIn(BaseModel):
-    name: str
-    email: Optional[str] = ''
-    mobile: str
-    subject: Optional[str] = ''
-    message: str
+    name: str = Field(min_length=1, max_length=200)
+    email: Optional[str] = Field('', max_length=200)
+    mobile: str = Field(min_length=1, max_length=20)
+    subject: Optional[str] = Field('', max_length=300)
+    message: str = Field(min_length=1, max_length=3000)
 
 class SettingsIn(BaseModel):
     business_name: Optional[str] = None
@@ -340,12 +380,32 @@ async def logout_all_admin_devices(request: Request, payload: Dict = Depends(req
 def slugify(s: str) -> str:
     return ''.join(c if c.isalnum() else '-' for c in s.lower()).strip('-').replace('--', '-')
 
+
+async def unique_slug(collection, base_slug: str, exclude_id: Optional[str] = None) -> str:
+    """Appends -2, -3, ... to base_slug until it doesn't collide with another document,
+    so two products/categories with the same (or similarly-named) title don't silently
+    make one of them unreachable by its /slug URL."""
+    slug = base_slug
+    n = 1
+    while True:
+        q: Dict = {'slug': slug}
+        if exclude_id:
+            q['id'] = {'$ne': exclude_id}
+        if not await collection.find_one(q, {'_id': 0, 'id': 1}):
+            return slug
+        n += 1
+        slug = f'{base_slug}-{n}'
+
 @api_router.get('/categories')
 async def list_categories():
+    cached = cache_get('categories')
+    if cached is not None:
+        return cached
     cats = await db.categories.find({}, {'_id': 0}).sort('order', 1).to_list(500)
     # add product counts
     for c in cats:
         c['product_count'] = await db.products.count_documents({'category_id': c['id'], 'active': True})
+    cache_set('categories', cats)
     return cats
 
 @api_router.get('/categories/{cat_id}')
@@ -359,9 +419,10 @@ async def get_category(cat_id: str):
 async def create_category(cat: CategoryIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = cat.model_dump()
     doc['id'] = str(uuid.uuid4())
-    doc['slug'] = doc.get('slug') or slugify(cat.name)
+    doc['slug'] = await unique_slug(db.categories, doc.get('slug') or slugify(cat.name))
     doc['created_at'] = now_iso()
     await db.categories.insert_one(doc)
+    cache_invalidate('categories')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_category', doc['id'], {'name': doc.get('name')})
     doc.pop('_id', None)
     return doc
@@ -369,19 +430,26 @@ async def create_category(cat: CategoryIn, request: Request, payload: Dict = Dep
 @api_router.put('/categories/{cat_id}')
 async def update_category(cat_id: str, cat: CategoryIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = cat.model_dump()
-    if not doc.get('slug'):
-        doc['slug'] = slugify(cat.name)
+    doc['slug'] = await unique_slug(db.categories, doc.get('slug') or slugify(cat.name), exclude_id=cat_id)
     doc['updated_at'] = now_iso()
     res = await db.categories.update_one({'id': cat_id}, {'$set': doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail='Category not found')
     updated = await db.categories.find_one({'id': cat_id}, {'_id': 0})
+    cache_invalidate('categories')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_category', cat_id, {'name': doc.get('name')})
     return updated
 
 @api_router.delete('/categories/{cat_id}')
 async def delete_category(cat_id: str, request: Request, payload: Dict = Depends(require_admin)):
+    product_count = await db.products.count_documents({'category_id': cat_id})
+    if product_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Cannot delete category: {product_count} product(s) are still assigned to it. Move or delete them first.',
+        )
     await db.categories.delete_one({'id': cat_id})
+    cache_invalidate('categories')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_category', cat_id)
     return {'ok': True}
 
@@ -447,11 +515,12 @@ async def get_product(pid: str):
 async def create_product(pr: ProductIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = pr.model_dump()
     doc['id'] = str(uuid.uuid4())
-    doc['slug'] = doc.get('slug') or slugify(pr.name)
+    doc['slug'] = await unique_slug(db.products, doc.get('slug') or slugify(pr.name))
     doc['created_at'] = now_iso()
     doc['avg_rating'] = 0.0
     doc['review_count'] = 0
     await db.products.insert_one(doc)
+    cache_invalidate('categories')  # product_count in /categories depends on this
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_product', doc['id'], {'name': doc.get('name')})
     doc.pop('_id', None)
     return doc
@@ -459,19 +528,20 @@ async def create_product(pr: ProductIn, request: Request, payload: Dict = Depend
 @api_router.put('/products/{pid}')
 async def update_product(pid: str, pr: ProductIn, request: Request, payload: Dict = Depends(require_admin)):
     doc = pr.model_dump()
-    if not doc.get('slug'):
-        doc['slug'] = slugify(pr.name)
+    doc['slug'] = await unique_slug(db.products, doc.get('slug') or slugify(pr.name), exclude_id=pid)
     doc['updated_at'] = now_iso()
     res = await db.products.update_one({'id': pid}, {'$set': doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail='Product not found')
     p = await db.products.find_one({'id': pid}, {'_id': 0})
+    cache_invalidate('categories')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_product', pid, {'name': doc.get('name')})
     return p
 
 @api_router.delete('/products/{pid}')
 async def delete_product(pid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.products.delete_one({'id': pid})
+    cache_invalidate('categories')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_product', pid)
     return {'ok': True}
 
@@ -956,7 +1026,11 @@ async def export_customers(_: Dict = Depends(require_admin)):
 
 @api_router.get('/banners')
 async def list_banners():
+    cached = cache_get('banners')
+    if cached is not None:
+        return cached
     docs = await db.banners.find({'active': True}, {'_id': 0}).sort('order', 1).to_list(50)
+    cache_set('banners', docs)
     return docs
 
 @api_router.get('/banners/all')
@@ -970,6 +1044,7 @@ async def create_banner(b: BannerIn, request: Request, payload: Dict = Depends(r
     doc['id'] = str(uuid.uuid4())
     doc['created_at'] = now_iso()
     await db.banners.insert_one(doc)
+    cache_invalidate('banners')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_banner', doc['id'], {'title': doc.get('title')})
     doc.pop('_id', None)
     return doc
@@ -982,12 +1057,14 @@ async def update_banner(bid: str, b: BannerIn, request: Request, payload: Dict =
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail='Banner not found')
     banner = await db.banners.find_one({'id': bid}, {'_id': 0})
+    cache_invalidate('banners')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_banner', bid, {'title': doc.get('title')})
     return banner
 
 @api_router.delete('/banners/{bid}')
 async def delete_banner(bid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.banners.delete_one({'id': bid})
+    cache_invalidate('banners')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_banner', bid)
     return {'ok': True}
 
@@ -1290,9 +1367,13 @@ async def delete_contact(cid: str, request: Request, payload: Dict = Depends(req
 
 @api_router.get('/settings')
 async def get_settings():
+    cached = cache_get('settings')
+    if cached is not None:
+        return cached
     s = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
     if not s.get('email'):
         s['email'] = DEFAULT_BUSINESS_EMAIL
+    cache_set('settings', s)
     return s
 
 @api_router.put('/settings')
@@ -1301,6 +1382,7 @@ async def update_settings(s: SettingsIn, request: Request, payload: Dict = Depen
     doc['id'] = 'main'
     doc['updated_at'] = now_iso()
     await db.settings.update_one({'id': 'main'}, {'$set': doc}, upsert=True)
+    cache_invalidate('settings')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_settings', 'main')
     return await db.settings.find_one({'id': 'main'}, {'_id': 0})
 
@@ -1683,11 +1765,45 @@ async def on_start():
 async def root():
     return {'app': 'Kiran Traders API', 'version': '1.0.0'}
 
+@api_router.get('/health')
+async def health():
+    try:
+        await db.command('ping')
+        return {'status': 'ok', 'db': 'connected'}
+    except Exception as exc:
+        logger.error('Health check failed: %s', exc)
+        raise HTTPException(status_code=503, detail='Database unavailable')
+
 app.include_router(api_router)
+
+
+@app.get('/sitemap.xml')
+async def sitemap():
+    cats = await db.categories.find({}, {'_id': 0, 'id': 1}).to_list(500)
+    prods = await db.products.find({'active': True}, {'_id': 0, 'slug': 1, 'updated_at': 1, 'created_at': 1}).to_list(10000)
+
+    static_urls = [
+        (f'{FRONTEND_URL}/', '1.0'),
+        (f'{FRONTEND_URL}/products', '0.9'),
+        (f'{FRONTEND_URL}/about', '0.5'),
+        (f'{FRONTEND_URL}/contact', '0.5'),
+    ]
+    entries = [f'<url><loc>{loc}</loc><priority>{priority}</priority></url>' for loc, priority in static_urls]
+    entries += [f"<url><loc>{FRONTEND_URL}/products?category={c['id']}</loc><priority>0.7</priority></url>" for c in cats]
+    for p in prods:
+        lastmod = (p.get('updated_at') or p.get('created_at') or '')[:10]
+        lastmod_tag = f'<lastmod>{lastmod}</lastmod>' if lastmod else ''
+        entries.append(f"<url><loc>{FRONTEND_URL}/products/{p['slug']}</loc>{lastmod_tag}<priority>0.8</priority></url>")
+
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + '\n'.join(entries) + '\n</urlset>'
+    return Response(content=xml, media_type='application/xml')
+
 
 app.add_middleware(
     security.SecureHeadersMiddleware,
 )
+
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 app.add_middleware(
     CORSMiddleware,
