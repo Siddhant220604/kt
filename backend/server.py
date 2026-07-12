@@ -28,7 +28,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -47,6 +47,13 @@ WHATSAPP_ACCESS_TOKEN = os.environ.get('WHATSAPP_ACCESS_TOKEN', '')
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '')
 WHATSAPP_VERIFY_TOKEN = os.environ.get('WHATSAPP_VERIFY_TOKEN', '')
 WHATSAPP_API_VERSION = os.environ.get('WHATSAPP_API_VERSION', 'v23.0')
+
+GOOGLE_REVIEW_LINK = os.environ.get('GOOGLE_REVIEW_LINK', '')
+REVIEW_REQUEST_DELAY_SECONDS = int(os.environ.get('REVIEW_REQUEST_DELAY_SECONDS', str(24 * 60 * 60)))
+
+# Strong references to fire-and-forget asyncio tasks (e.g. the delayed review-request
+# job) so they aren't garbage-collected mid-flight; entries are discarded on completion.
+_background_asyncio_tasks: set = set()
 
 app = FastAPI(title="Kiran Traders API")
 api_router = APIRouter(prefix="/api")
@@ -241,6 +248,7 @@ class SettingsIn(BaseModel):
     email: Optional[str] = None
     upi_id: Optional[str] = None
     upi_qr: Optional[str] = None
+    logo: Optional[str] = None
     bank_details: Optional[str] = None
     hours: Optional[str] = None
     gstin: Optional[str] = None
@@ -584,7 +592,7 @@ async def create_razorpay_order(req: PaymentCreateOrderRequest):
 
 
 @api_router.post('/payment/verify')
-async def verify_razorpay_payment(req: PaymentVerifyRequest):
+async def verify_razorpay_payment(req: PaymentVerifyRequest, request: Request, background_tasks: BackgroundTasks):
     if not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=400, detail='Razorpay is not configured yet.')
 
@@ -607,12 +615,14 @@ async def verify_razorpay_payment(req: PaymentVerifyRequest):
     }})
     updated = await db.orders.find_one({'id': req.order_id}, {'_id': 0})
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
-    send_order_notification(updated, settings)
+    background_tasks.add_task(send_order_notification, updated, settings)
+    # Feature 2: order is now confirmed via online payment - validate/deliver the invoice link
+    background_tasks.add_task(send_invoice_whatsapp_task, req.order_id, settings, str(request.base_url))
     return {'ok': True, 'order': updated}
 
 
 @api_router.post('/payment/webhook')
-async def razorpay_webhook(request: Any):
+async def razorpay_webhook(request: Request):
     signature = request.headers.get('X-Razorpay-Signature', '')
     if not signature or not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=400, detail='Invalid webhook request')
@@ -648,7 +658,7 @@ async def razorpay_webhook(request: Any):
 # ------------------ ORDERS ------------------
 
 @api_router.post('/orders')
-async def create_order(order: OrderIn):
+async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
     if not order.items:
         raise HTTPException(status_code=400, detail='No items')
     subtotal = 0.0
@@ -716,7 +726,7 @@ async def create_order(order: OrderIn):
     if coupon_code:
         await db.coupons.update_one({'code': coupon_code}, {'$inc': {'used_count': 1}})
     doc.pop('_id', None)
-    send_order_notification(doc, settings)
+    background_tasks.add_task(send_order_notification, doc, settings)
     return doc
 
 @api_router.post('/orders/track')
@@ -771,7 +781,14 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
     updated = await db.orders.find_one({'id': oid}, {'_id': 0})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_order_status', oid, {'status': upd.status})
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    # Feature 1: WhatsApp status-update notification (non-blocking)
     background_tasks.add_task(send_order_status_update_whatsapp, updated, upd.status, settings)
+    # Feature 2: once an order is confirmed, generate/validate the invoice and WhatsApp the link
+    if upd.status == 'confirmed':
+        background_tasks.add_task(send_invoice_whatsapp_task, oid, settings, str(request.base_url))
+    # Feature 3: once delivered, schedule a one-time review request ~24h later
+    if upd.status == 'delivered':
+        schedule_review_request(oid)
     return updated
 
 @api_router.get('/orders/{oid}/invoice')
@@ -884,7 +901,6 @@ async def approve_review(rid: str, request: Request, payload: Dict = Depends(req
     # recalculate product rating
     pid = r['product_id']
     approved = await db.reviews.find({'product_id': pid, 'approved': True}, {'_id': 0, 'rating': 1}).to_list(1000)
-    approved.append({'rating': r['rating']}) if not any(a.get('id') == rid for a in approved) else None
     ratings = [a['rating'] for a in approved]
     avg = sum(ratings) / len(ratings) if ratings else 0
     await db.products.update_one({'id': pid}, {'$set': {'avg_rating': round(avg, 2), 'review_count': len(ratings)}})
@@ -934,19 +950,39 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
         logger.error('Failed to send WhatsApp order notification for order %s: %s', order_id, exc)
 
 
+# Feature 1: per-status WhatsApp templates. Statuses without a dedicated template
+# (e.g. 'pending', 'processing') fall back to the generic "is now {status}" message below.
+STATUS_WHATSAPP_TEMPLATES = {
+    'confirmed': "Hi {name},\n\nYour order #{order_id} has been confirmed.",
+    'packed': "Hi {name},\n\nYour order #{order_id} has been packed and is ready for dispatch.",
+    'shipped': "Hi {name},\n\nYour order #{order_id} has been shipped and is on its way.",
+    'out for delivery': "Hi {name},\n\nYour order #{order_id} is out for delivery and should arrive shortly.",
+    'delivered': "Hi {name},\n\nYour order #{order_id} has been delivered successfully.\n\nThank you for shopping with Kiran Traders.",
+    'cancelled': "Hi {name},\n\nUnfortunately your order #{order_id} has been cancelled.\n\nPlease contact us if you have any questions.",
+}
+
+
+def build_status_update_message(name: str, order_id: str, status: str, business_name: str) -> str:
+    template = STATUS_WHATSAPP_TEMPLATES.get(status)
+    if template:
+        return template.format(name=name, order_id=order_id)
+    return f"Hi {name}, your order {order_id} with {business_name} is now {status.title()}. Thank you for shopping with us."
+
+
 def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settings: Optional[Dict[str, Any]] = None) -> None:
     address = order.get('address') or {}
-    phone = build_whatsapp_number(str(address.get('mobile') or '').strip(), WHATSAPP_DEFAULT_COUNTRY_CODE)
+    mobile = str(address.get('mobile') or '').strip()
+    if not mobile:
+        logger.info('WhatsApp status update skipped: no customer mobile number for order %s', order.get('id'))
+        return
+    phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
     if not phone:
-        logger.info('WhatsApp status update skipped: no valid mobile for order %s', order.get('id'))
+        logger.info('WhatsApp status update skipped: invalid mobile number for order %s', order.get('id'))
         return
 
     order_id = order.get('id') or 'N/A'
     business_name = (settings or {}).get('business_name') or 'Kiran Traders'
-    msg_body = (
-        f"Hi {address.get('name') or 'Customer'}, your order {order_id} with {business_name} is now {status.title()}. "
-        "Thank you for shopping with us."
-    )
+    msg_body = build_status_update_message(address.get('name') or 'Customer', order_id, status, business_name)
 
     config = get_whatsapp_config()
     if not config.is_valid:
@@ -954,13 +990,148 @@ def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settin
         return
 
     try:
-        send_text_message(config, phone, msg_body)
+        result = send_text_message(config, phone, msg_body)
+        message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
+        logger.info('WhatsApp status update (%s) sent for order %s, message_id=%s', status, order_id, message_id)
     except Exception as exc:
         logger.error('Failed to send status update WhatsApp notification for order %s: %s', order_id, exc)
 
 
 def send_order_notification(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
     send_order_whatsapp(order, settings)
+
+
+# ------------------ FEATURE 2: PDF INVOICE + WHATSAPP ------------------
+
+async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str, Any]] = None, base_url: str = '') -> None:
+    """Background task: validate the invoice can be generated, then WhatsApp a link to it.
+    Runs after the response has been sent; never raises (all failures are logged and swallowed)
+    so it can never affect the order-confirmation flow it's attached to."""
+    try:
+        order = await db.orders.find_one({'id': order_id}, {'_id': 0})
+        if not order:
+            logger.warning('Invoice WhatsApp skipped: order %s not found', order_id)
+            return
+        if order.get('invoice_sent'):
+            logger.info('Invoice WhatsApp already sent for order %s, skipping', order_id)
+            return
+
+        address = order.get('address') or {}
+        mobile = str(address.get('mobile') or '').strip()
+        if not mobile:
+            logger.info('Invoice WhatsApp skipped: no customer mobile number for order %s', order_id)
+            return
+        phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
+        if not phone:
+            logger.info('Invoice WhatsApp skipped: invalid mobile number for order %s', order_id)
+            return
+
+        settings = settings if settings is not None else (await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {})
+
+        try:
+            # Generate (and validate) the PDF off the event loop; the customer-facing link
+            # re-generates it on demand via the existing /orders/{oid}/invoice endpoint, so
+            # nothing needs to be persisted here - this call just confirms it won't fail.
+            await asyncio.to_thread(build_invoice_pdf, order, settings)
+        except Exception:
+            logger.exception('Invoice PDF generation failed for order %s; skipping WhatsApp send', order_id)
+            return
+
+        base = (base_url or '').rstrip('/')
+        invoice_url = f"{base}/api/orders/{order_id}/invoice?mobile={mobile}"
+        msg_body = (
+            f"Hi {address.get('name') or 'Customer'},\n\n"
+            "Thank you for your order.\n\n"
+            "Your invoice is ready.\n\n"
+            f"Invoice:\n{invoice_url}\n\n"
+            "Thank you for choosing Kiran Traders."
+        )
+
+        config = get_whatsapp_config()
+        if not config.is_valid:
+            logger.warning('WhatsApp Cloud API not configured; invoice message skipped for order %s', order_id)
+            return
+
+        result = await asyncio.to_thread(send_text_message, config, phone, msg_body)
+        message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
+        await db.orders.update_one({'id': order_id}, {'$set': {'invoice_sent': True, 'invoice_sent_at': now_iso()}})
+        logger.info('Invoice WhatsApp sent for order %s, message_id=%s', order_id, message_id)
+    except Exception:
+        logger.exception('Unexpected error sending invoice WhatsApp for order %s', order_id)
+
+
+# ------------------ FEATURE 3: DELAYED REVIEW REQUEST ------------------
+
+def schedule_review_request(order_id: str) -> None:
+    """Fire-and-forget asyncio task (not tied to any single request's lifecycle) that
+    waits REVIEW_REQUEST_DELAY_SECONDS (default 24h) then sends a one-time WhatsApp
+    review request, provided the order is still delivered and hasn't already been sent one.
+    Deliberately synchronous: it must be a plain function call (not awaited) at the call
+    site so asyncio.create_task() detaches the 24h wait from the triggering request."""
+    task = asyncio.create_task(_send_review_request_after_delay(order_id))
+    _background_asyncio_tasks.add(task)
+    task.add_done_callback(_background_asyncio_tasks.discard)
+
+
+async def _send_review_request_after_delay(order_id: str) -> None:
+    try:
+        logger.info('Review request for order %s scheduled in %ss', order_id, REVIEW_REQUEST_DELAY_SECONDS)
+        await asyncio.sleep(REVIEW_REQUEST_DELAY_SECONDS)
+
+        order = await db.orders.find_one({'id': order_id}, {'_id': 0})
+        if not order:
+            logger.warning('Review request skipped: order %s not found', order_id)
+            return
+        if order.get('review_request_sent'):
+            logger.info('Review request already sent for order %s, skipping', order_id)
+            return
+        if order.get('status') != 'delivered':
+            logger.info('Review request skipped: order %s status changed to %s', order_id, order.get('status'))
+            return
+
+        address = order.get('address') or {}
+        mobile = str(address.get('mobile') or '').strip()
+        if not mobile:
+            logger.info('Review request skipped: no customer mobile number for order %s', order_id)
+            return
+        phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
+        if not phone:
+            logger.info('Review request skipped: invalid mobile number for order %s', order_id)
+            return
+        if not GOOGLE_REVIEW_LINK:
+            logger.warning('Review request skipped: GOOGLE_REVIEW_LINK is not configured (order %s)', order_id)
+            return
+
+        config = get_whatsapp_config()
+        if not config.is_valid:
+            logger.warning('WhatsApp Cloud API not configured; review request skipped for order %s', order_id)
+            return
+
+        # Atomically claim the send so a status flapping back to 'delivered' can't
+        # schedule (and eventually fire) a second review request for the same order.
+        claimed = await db.orders.find_one_and_update(
+            {'id': order_id, 'review_request_sent': {'$ne': True}},
+            {'$set': {'review_request_sent': True, 'review_request_sent_at': now_iso()}},
+        )
+        if not claimed:
+            logger.info('Review request already claimed for order %s, skipping', order_id)
+            return
+
+        msg_body = (
+            f"Hi {address.get('name') or 'Customer'},\n\n"
+            "We hope you enjoyed your purchase from Kiran Traders.\n\n"
+            "Your feedback means a lot to us.\n\n"
+            f"Please leave us a review:\n\n{GOOGLE_REVIEW_LINK}\n\n"
+            "Thank you for supporting our business."
+        )
+        try:
+            result = await asyncio.to_thread(send_text_message, config, phone, msg_body)
+            message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
+            logger.info('Review request WhatsApp sent for order %s, message_id=%s', order_id, message_id)
+        except Exception as exc:
+            logger.error('Failed to send review request WhatsApp for order %s: %s', order_id, exc)
+    except Exception:
+        logger.exception('Unexpected error in review request scheduler for order %s', order_id)
 
 
 @api_router.post('/contact')
@@ -1125,6 +1296,16 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     h1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=20, textColor=colors.HexColor('#8b4a2b'))
     story = []
     bname = settings.get('business_name', 'Kiran Traders')
+    logo_data = settings.get('logo')
+    if logo_data:
+        try:
+            b64_data = logo_data.split(',', 1)[1] if ',' in logo_data else logo_data
+            logo_img = Image(io.BytesIO(base64.b64decode(b64_data)), width=25 * mm, height=25 * mm)
+            logo_img.hAlign = 'LEFT'
+            story.append(logo_img)
+            story.append(Spacer(1, 4))
+        except Exception:
+            logger.warning('Invoice logo could not be decoded/embedded; continuing without it')
     story.append(Paragraph(f'<b>{bname}</b>', h1))
     story.append(Paragraph(settings.get('tagline', 'Wholesale & Retail Packaging Essentials - Since 1996'), small))
     story.append(Paragraph(settings.get('address', 'Sector K, 805-D, Aashiyana, Lucknow, UP'), small))
@@ -1137,8 +1318,9 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
 
     addr = order.get('address', {})
     info = [
-        ['Invoice No:', order.get('id', ''), 'Date:', order.get('created_at', '')[:10]],
-        ['Order Status:', order.get('status', '').title(), 'Payment:', order.get('payment_method', '').upper()],
+        ['Invoice No:', order.get('id', ''), 'Order ID:', order.get('id', '')],
+        ['Date:', order.get('created_at', '')[:10], 'Payment:', order.get('payment_method', '').upper()],
+        ['Order Status:', order.get('status', '').title(), '', ''],
     ]
     t = Table(info, colWidths=[30*mm, 60*mm, 25*mm, 60*mm])
     t.setStyle(TableStyle([
@@ -1186,8 +1368,8 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     if order.get('tax', 0):
         totals.append([f"GST ({order.get('tax_rate', 0)}%):", f"Rs.{order.get('tax', 0):.2f}"])
     if order.get('shipping', 0):
-        totals.append(['Shipping:', f"Rs.{order.get('shipping', 0):.2f}"])
-    totals.append(['TOTAL:', f"Rs.{order.get('total', 0):.2f}"])
+        totals.append(['Delivery Charge:', f"Rs.{order.get('shipping', 0):.2f}"])
+    totals.append(['GRAND TOTAL:', f"Rs.{order.get('total', 0):.2f}"])
     tt = Table(totals, colWidths=[140*mm, 40*mm])
     tt.setStyle(TableStyle([
         ('FONT', (0, 0), (-1, -1), 'Helvetica', 9),

@@ -264,7 +264,7 @@ export default function Checkout() {
                   <Label className="text-xs text-muted-foreground">Coupon code</Label>
                   <div className="mt-2 flex gap-2">
                     <Input value={coupon} onChange={(e) => setCoupon(e.target.value)} placeholder="Enter coupon code" />
-                    <Button type="button" variant="outline" onClick={applyCoupon} className="whitespace-nowrap">Apply</Button>
+                    <Button type="button" variant="outline" onClick={() => applyCoupon()} className="whitespace-nowrap">Apply</Button>
                   </div>
                   {couponMsg && <div className="mt-2 text-xs text-muted-foreground">{couponMsg}</div>}
                   {applied && (
