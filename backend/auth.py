@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -6,6 +7,8 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 import jwt
 from passlib.context import CryptContext
+
+logger = logging.getLogger(__name__)
 
 package_dir = Path(__file__).resolve().parent
 load_dotenv(package_dir / '.env')
@@ -16,6 +19,15 @@ if not JWT_SECRET:
     raise EnvironmentError('JWT_SECRET is not set in the environment or backend/.env')
 JWT_ALGO = 'HS256'
 JWT_EXPIRE_MINUTES = int(os.environ.get('JWT_EXPIRE_MINUTES', '120'))
+
+_WEAK_JWT_SECRETS = {'devsecret', 'secret', 'changeme', 'password', 'test', 'default', 'admin', 'jwtsecret'}
+if JWT_SECRET.lower() in _WEAK_JWT_SECRETS or len(JWT_SECRET) < 32:
+    logger.warning(
+        'JWT_SECRET looks weak/placeholder (%d chars). Anyone who guesses it can forge admin '
+        'tokens. Set a long random value (e.g. `python -c "import secrets; print(secrets.token_urlsafe(48))"`) '
+        'in production.',
+        len(JWT_SECRET),
+    )
 
 pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 

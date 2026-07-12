@@ -11,6 +11,7 @@ from typing import List, Optional, Any, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
 import asyncio
+import csv
 import hashlib
 import hmac
 import io
@@ -657,10 +658,36 @@ async def razorpay_webhook(request: Request):
 
 # ------------------ ORDERS ------------------
 
+# Rejects an identical order (same mobile + cart contents + payment method) resubmitted
+# within DUPLICATE_ORDER_WINDOW_SECONDS - guards against double-clicking "Place Order"
+# creating two orders (and reserving stock twice) before the button's own disabled
+# state has a chance to catch it.
+_recent_order_fingerprints: Dict[str, datetime] = {}
+DUPLICATE_ORDER_WINDOW_SECONDS = 15
+
+
+def _order_fingerprint(order: 'OrderIn') -> str:
+    items_key = sorted((it.product_id, it.quantity) for it in order.items)
+    raw = f"{order.address.mobile}|{items_key}|{order.payment_method}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _check_duplicate_order(order: 'OrderIn') -> None:
+    now = datetime.now(timezone.utc)
+    expired = [k for k, ts in _recent_order_fingerprints.items() if (now - ts).total_seconds() >= DUPLICATE_ORDER_WINDOW_SECONDS]
+    for k in expired:
+        del _recent_order_fingerprints[k]
+    fp = _order_fingerprint(order)
+    if fp in _recent_order_fingerprints:
+        raise HTTPException(status_code=409, detail='This order was just submitted. Please wait a moment before trying again.')
+    _recent_order_fingerprints[fp] = now
+
+
 @api_router.post('/orders')
 async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
     if not order.items:
         raise HTTPException(status_code=400, detail='No items')
+    _check_duplicate_order(order)
     subtotal = 0.0
     validated_items = []
     for it in order.items:
@@ -719,10 +746,22 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
         'status_history': [{'status': 'pending', 'at': now_iso(), 'note': 'Order placed'}],
         'created_at': now_iso(),
     }
-    await db.orders.insert_one(doc)
-    # decrement stock
+    # Atomically reserve stock for every line item before creating the order, rolling
+    # back any lines already reserved if a later one fails. The $gte guard makes this
+    # safe under concurrency (unlike a plain read-then-write), so two customers racing
+    # for the last unit can't both succeed.
+    reserved: List[Dict] = []
     for it in validated_items:
-        await db.products.update_one({'id': it['product_id']}, {'$inc': {'stock': -it['quantity']}})
+        res = await db.products.update_one(
+            {'id': it['product_id'], 'stock': {'$gte': it['quantity']}},
+            {'$inc': {'stock': -it['quantity']}},
+        )
+        if res.matched_count == 0:
+            for r in reserved:
+                await db.products.update_one({'id': r['product_id']}, {'$inc': {'stock': r['quantity']}})
+            raise HTTPException(status_code=400, detail=f"Insufficient stock for {it['name']}")
+        reserved.append(it)
+    await db.orders.insert_one(doc)
     if coupon_code:
         await db.coupons.update_one({'code': coupon_code}, {'$inc': {'used_count': 1}})
     doc.pop('_id', None)
@@ -760,6 +799,41 @@ async def list_orders(
     docs = await db.orders.find(q, {'_id': 0}).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
     return {'items': docs, 'total': total, 'page': page, 'limit': limit}
 
+@api_router.get('/orders/export')
+async def export_orders(
+    status_f: Optional[str] = Query(None, alias='status'),
+    search: Optional[str] = None,
+    _: Dict = Depends(require_admin),
+):
+    q: Dict = {}
+    if status_f:
+        q['status'] = status_f
+    if search:
+        q['$or'] = [
+            {'id': {'$regex': search, '$options': 'i'}},
+            {'address.name': {'$regex': search, '$options': 'i'}},
+            {'address.mobile': {'$regex': search, '$options': 'i'}},
+        ]
+    docs = await db.orders.find(q, {'_id': 0}).sort('created_at', -1).to_list(100000)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(['Order ID', 'Date', 'Status', 'Customer Name', 'Mobile', 'Email', 'City', 'State', 'Pincode',
+                      'Items', 'Subtotal', 'Discount', 'Tax', 'Shipping', 'Total', 'Payment Method', 'Payment Status'])
+    for o in docs:
+        addr = o.get('address', {})
+        items_summary = '; '.join(f"{it.get('name', '')} x{it.get('quantity', 0)}" for it in o.get('items', []))
+        writer.writerow([
+            o.get('id', ''), o.get('created_at', '')[:10], o.get('status', ''),
+            addr.get('name', ''), addr.get('mobile', ''), addr.get('email', ''),
+            addr.get('city', ''), addr.get('state', ''), addr.get('pincode', ''),
+            items_summary, o.get('subtotal', 0), o.get('discount', 0), o.get('tax', 0),
+            o.get('shipping', 0), o.get('total', 0), o.get('payment_method', ''), o.get('payment_status', ''),
+        ])
+    return Response(content=buf.getvalue(), media_type='text/csv', headers={
+        'Content-Disposition': f'attachment; filename=orders-{datetime.now(timezone.utc).strftime("%Y%m%d")}.csv'
+    })
+
 @api_router.get('/orders/{oid}')
 async def get_order(oid: str, _: Dict = Depends(require_admin)):
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
@@ -775,6 +849,27 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
         raise HTTPException(status_code=404, detail='Order not found')
+    old_status = o.get('status')
+
+    # Cancelling releases the stock the order reserved; un-cancelling re-reserves it
+    # atomically (so un-cancelling fails cleanly if that stock has since been sold
+    # elsewhere), rolling back any lines already reserved if a later one can't be.
+    if upd.status == 'cancelled' and old_status != 'cancelled':
+        for it in o.get('items', []):
+            await db.products.update_one({'id': it['product_id']}, {'$inc': {'stock': it['quantity']}})
+    elif old_status == 'cancelled' and upd.status != 'cancelled':
+        reserved: List[Dict] = []
+        for it in o.get('items', []):
+            res = await db.products.update_one(
+                {'id': it['product_id'], 'stock': {'$gte': it['quantity']}},
+                {'$inc': {'stock': -it['quantity']}},
+            )
+            if res.matched_count == 0:
+                for r in reserved:
+                    await db.products.update_one({'id': r['product_id']}, {'$inc': {'stock': r['quantity']}})
+                raise HTTPException(status_code=400, detail=f"Cannot un-cancel order: insufficient stock for {it['name']}")
+            reserved.append(it)
+
     hist = o.get('status_history', [])
     hist.append({'status': upd.status, 'at': now_iso(), 'note': upd.tracking_note or ''})
     await db.orders.update_one({'id': oid}, {'$set': {'status': upd.status, 'status_history': hist, 'updated_at': now_iso()}})
@@ -828,6 +923,35 @@ async def list_customers(_: Dict = Depends(require_admin)):
         d.pop('_id', None)
     return docs
 
+@api_router.get('/customers/export')
+async def export_customers(_: Dict = Depends(require_admin)):
+    pipeline = [
+        {'$group': {
+            '_id': '$address.mobile',
+            'name': {'$last': '$address.name'},
+            'email': {'$last': '$address.email'},
+            'mobile': {'$last': '$address.mobile'},
+            'city': {'$last': '$address.city'},
+            'orders': {'$sum': 1},
+            'spent': {'$sum': '$total'},
+            'last_order': {'$max': '$created_at'},
+        }},
+        {'$sort': {'last_order': -1}},
+    ]
+    docs = await db.orders.aggregate(pipeline).to_list(10000)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(['Name', 'Mobile', 'Email', 'City', 'Orders', 'Total Spent', 'Last Order'])
+    for d in docs:
+        writer.writerow([
+            d.get('name', ''), d.get('mobile', ''), d.get('email', ''), d.get('city', ''),
+            d.get('orders', 0), d.get('spent', 0), (d.get('last_order') or '')[:10],
+        ])
+    return Response(content=buf.getvalue(), media_type='text/csv', headers={
+        'Content-Disposition': f'attachment; filename=customers-{datetime.now(timezone.utc).strftime("%Y%m%d")}.csv'
+    })
+
 # ------------------ BANNERS ------------------
 
 @api_router.get('/banners')
@@ -875,7 +999,8 @@ async def product_reviews(pid: str):
     return docs
 
 @api_router.post('/reviews')
-async def create_review(r: ReviewIn):
+async def create_review(r: ReviewIn, request: Request):
+    dependencies.check_rate_limit(request, 'create_review', max_requests=5, window_seconds=15 * 60)
     if r.rating < 1 or r.rating > 5:
         raise HTTPException(status_code=400, detail='Rating must be 1-5')
     doc = r.model_dump()
@@ -1134,7 +1259,8 @@ async def _send_review_request_after_delay(order_id: str) -> None:
 
 
 @api_router.post('/contact')
-async def contact_submit(c: ContactIn, background_tasks: BackgroundTasks):
+async def contact_submit(c: ContactIn, request: Request, background_tasks: BackgroundTasks):
+    dependencies.check_rate_limit(request, 'contact_submit', max_requests=5, window_seconds=15 * 60)
     doc = c.model_dump()
     doc['id'] = str(uuid.uuid4())
     doc['created_at'] = now_iso()

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { api, formatINR } from '../lib/api';
 import { Container, Section } from '../components/site/Section';
+import Seo from '../components/site/Seo';
 import ProductCard from '../components/ProductCard';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -85,6 +86,10 @@ export default function Products() {
 
   return (
     <Section>
+      <Seo
+        title={currentCat ? currentCat.name : search ? `Search: "${search}"` : 'All Products'}
+        description={currentCat?.description || 'Browse thermocol plates, carry bags, disposable glasses, packaging materials and more - wholesale pricing, GST invoicing, fast dispatch across Lucknow.'}
+      />
       <Container>
         <div className="mb-6">
           <h1 className="text-3xl md:text-4xl font-display font-bold">{currentCat ? currentCat.name : search ? `Search: "${search}"` : 'All Products'}</h1>

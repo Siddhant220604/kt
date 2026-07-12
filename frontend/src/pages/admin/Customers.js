@@ -1,12 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import { api, formatINR } from '../../lib/api';
+import { api, formatINR, downloadFile } from '../../lib/api';
+import { Button } from '../../components/ui/button';
+import { Download } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function AdminCustomers() {
   const [rows, setRows] = useState([]);
   useEffect(() => { api.get('/customers').then(r => setRows(r.data)); }, []);
+
+  const exportCsv = async () => {
+    try {
+      await downloadFile('/customers/export', {}, `customers-${new Date().toISOString().slice(0, 10)}.csv`);
+    } catch { toast.error('Failed to export customers'); }
+  };
+
   return (
     <div className="space-y-4">
-      <div><h1 className="text-2xl font-display font-bold">Customers</h1><p className="text-sm text-muted-foreground">{rows.length} customers</p></div>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-display font-bold">Customers</h1><p className="text-sm text-muted-foreground">{rows.length} customers</p></div>
+        <Button variant="outline" className="gap-2" onClick={exportCsv} data-testid="admin-customers-export"><Download className="h-4 w-4" />Export CSV</Button>
+      </div>
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

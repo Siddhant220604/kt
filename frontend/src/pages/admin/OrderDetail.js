@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { ChevronLeft, FileText, MessageCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
-const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
+const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', processing: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
 
 export default function AdminOrderDetail() {
   const { oid } = useParams();
@@ -77,7 +77,7 @@ export default function AdminOrderDetail() {
               <Select value={next} onValueChange={setNext}>
                 <SelectTrigger className="w-52" data-testid="admin-status-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {['pending', 'confirmed', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
+                  {['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Textarea placeholder="Optional note (e.g., courier tracking #)" rows={2} value={note} onChange={(e) => setNote(e.target.value)} className="flex-1 min-w-64" data-testid="admin-status-note" />

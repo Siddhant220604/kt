@@ -56,3 +56,18 @@ api.interceptors.response.use(
 );
 
 export const formatINR = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
+
+// Downloads an authenticated endpoint's response as a file. Plain <a href> can't be
+// used for admin exports since the browser won't attach the Bearer token to a direct
+// navigation - this fetches via the authenticated axios client and saves the blob.
+export const downloadFile = async (path, params, filename) => {
+  const res = await api.get(path, { params, responseType: 'blob' });
+  const url = window.URL.createObjectURL(res.data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+};

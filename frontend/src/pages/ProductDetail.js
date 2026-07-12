@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, formatINR } from '../lib/api';
 import { Container, Section } from '../components/site/Section';
+import Seo from '../components/site/Seo';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
@@ -77,6 +78,12 @@ export default function ProductDetail() {
 
   return (
     <div>
+      <Seo
+        title={product.name}
+        description={product.short_description || product.description || `Buy ${product.name} at wholesale prices from Kiran Traders, Lucknow.`}
+        image={images[0]}
+        type="product"
+      />
       <Section className="pt-6">
         <Container>
           <Link to="/products" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4"><ChevronLeft className="h-4 w-4" /> Back to products</Link>

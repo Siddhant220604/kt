@@ -1,6 +1,7 @@
 import React from 'react';
 import { Award, ShieldCheck, Users, Truck, MapPin, Phone, Clock, Star } from 'lucide-react';
 import { Container, Section, SectionTitle } from '../components/site/Section';
+import Seo from '../components/site/Seo';
 import { Badge } from '../components/ui/badge';
 import { useSettings } from '../lib/settings';
 
@@ -8,6 +9,7 @@ export default function About() {
   const { settings } = useSettings();
   return (
     <div>
+      <Seo title="About Us" description="Kiran Traders - Lucknow's trusted wholesale packaging partner since 1996. Thermocol plates, carry bags, disposables & more." />
       <div className="hero-radial noise-overlay border-b border-border">
         <Container className="relative z-10 py-14 md:py-20">
           <Badge className="bg-[hsl(var(--brand-marigold))] text-black mb-4">Since 1996</Badge>

@@ -8,6 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
 import ProductCard from '../components/ProductCard';
 import { Container, Section, SectionTitle } from '../components/site/Section';
+import Seo from '../components/site/Seo';
 import { useSettings } from '../lib/settings';
 
 const iconFor = (name) => ({
@@ -51,6 +52,7 @@ export default function Home() {
 
   return (
     <div>
+      <Seo />
       {/* HERO */}
       <section className="hero-radial noise-overlay relative overflow-hidden border-b border-border">
         <Container className="relative z-10 py-14 md:py-20 grid lg:grid-cols-2 gap-10 items-center">

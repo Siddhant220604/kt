@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, formatINR } from '../../lib/api';
+import { api, formatINR, downloadFile } from '../../lib/api';
 import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import { Skeleton } from '../../components/ui/skeleton';
-import { Search } from 'lucide-react';
+import { Search, Download } from 'lucide-react';
+import { toast } from 'sonner';
 
-const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
+const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', processing: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
 
 export default function AdminOrders() {
   const [sp, setSp] = useSearchParams();
@@ -29,6 +30,15 @@ export default function AdminOrders() {
   const setStatus = (v) => { const n = new URLSearchParams(sp); if (v === 'all') n.delete('status'); else n.set('status', v); setSp(n); };
   const setSearch = (v) => { const n = new URLSearchParams(sp); if (!v) n.delete('search'); else n.set('search', v); setSp(n); };
 
+  const exportCsv = async () => {
+    try {
+      const params = {};
+      if (status && status !== 'all') params.status = status;
+      if (search) params.search = search;
+      await downloadFile('/orders/export', params, `orders-${new Date().toISOString().slice(0, 10)}.csv`);
+    } catch { toast.error('Failed to export orders'); }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -36,14 +46,17 @@ export default function AdminOrders() {
           <h1 className="text-2xl font-display font-bold">Orders</h1>
           <p className="text-sm text-muted-foreground">{data.total} orders</p>
         </div>
-        <form onSubmit={(e) => { e.preventDefault(); setSearch(q); }} className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search order id / mobile / name" className="pl-9 w-72" data-testid="admin-orders-search" />
-        </form>
+        <div className="flex items-center gap-2">
+          <form onSubmit={(e) => { e.preventDefault(); setSearch(q); }} className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search order id / mobile / name" className="pl-9 w-72" data-testid="admin-orders-search" />
+          </form>
+          <Button variant="outline" className="gap-2" onClick={exportCsv} data-testid="admin-orders-export"><Download className="h-4 w-4" />Export CSV</Button>
+        </div>
       </div>
       <Tabs value={status} onValueChange={setStatus} data-testid="admin-orders-status-tabs">
         <TabsList className="flex-wrap h-auto">
-          {['all', 'pending', 'confirmed', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => (
+          {['all', 'pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => (
             <TabsTrigger key={s} value={s} className="capitalize">{s}</TabsTrigger>
           ))}
         </TabsList>

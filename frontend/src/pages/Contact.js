@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Container, Section } from '../components/site/Section';
+import Seo from '../components/site/Seo';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
@@ -21,12 +22,13 @@ export default function Contact() {
       await api.post('/contact', form);
       toast.success('Message sent! We’ll get back to you shortly.');
       setForm({ name: '', email: '', mobile: '', subject: '', message: '' });
-    } catch (e) { toast.error('Failed to send message'); }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to send message'); }
     finally { setSending(false); }
   };
 
   return (
     <Section>
+      <Seo title="Contact Us" description="Get in touch with Kiran Traders, Lucknow - call, WhatsApp, or send us a message for bulk orders and enquiries." />
       <Container>
         <h1 className="text-3xl md:text-4xl font-display font-bold">Contact Us</h1>
         <p className="text-muted-foreground mt-1">We reply within business hours. For fastest response, WhatsApp us.</p>

@@ -1,5 +1,6 @@
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HelmetProvider } from 'react-helmet-async';
 import { Toaster } from './components/ui/sonner';
 import { CartProvider } from './lib/cart';
 import { WishlistProvider } from './lib/wishlist';
@@ -47,6 +48,7 @@ const Loading = () => (
 function App() {
   return (
     <div className="App">
+      <HelmetProvider>
       <ThemeProvider>
         <SettingsProvider>
           <CartProvider>
@@ -94,6 +96,7 @@ function App() {
           </CartProvider>
         </SettingsProvider>
       </ThemeProvider>
+      </HelmetProvider>
     </div>
   );
 }
