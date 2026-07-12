@@ -53,22 +53,37 @@ def send_whatsapp_message(
         **payload,
     }
     logger.info('Sending WhatsApp message to %s via %s', to_number, config.api_url)
+    logger.info('Request URL: %s', config.api_url)
+    logger.info('Request JSON payload: %s', data)
+    logger.info('Recipient phone number: %s', to_number)
+
+    template_name = None
+    language = None
+    template_parameters = None
+    if message_type == 'template':
+        template_name = payload.get('template', {}).get('name')
+        language = payload.get('template', {}).get('language', {}).get('code')
+        template_parameters = payload.get('template', {}).get('components')
+        if template_parameters is not None:
+            logger.info('Template name: %s', template_name)
+            logger.info('Language: %s', language)
+            logger.info('Template parameters: %s', template_parameters)
+
     try:
         resp = requests.post(config.api_url, headers=headers, json=data, timeout=15)
     except requests.RequestException as exc:
         logger.exception('WhatsApp API request failed for %s', to_number)
-        logger.error('Response text: N/A')
+        logger.error('Full error response: %s', exc)
         raise
 
-    logger.info('Status Code: %s', resp.status_code)
-    logger.info('Response:')
-    logger.info('%s', resp.text)
+    logger.info('HTTP status code: %s', resp.status_code)
+    logger.info('Full response JSON: %s', resp.text)
 
     try:
         resp.raise_for_status()
     except requests.RequestException as exc:
         logger.exception('WhatsApp API request failed for %s', to_number)
-        logger.error('Response text: %s', resp.text)
+        logger.error('Full error response: %s', resp.text)
         raise
 
     response_payload = resp.json()
@@ -79,7 +94,7 @@ def send_whatsapp_message(
         message_id = None
 
     if message_id:
-        logger.info('Returned message ID: %s', message_id)
+        logger.info('Message ID: %s', message_id)
 
     return response_payload
 

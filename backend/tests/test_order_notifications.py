@@ -161,6 +161,56 @@ def test_send_whatsapp_logs_response_details(monkeypatch, caplog):
 
     assert result == {'messages': [{'id': 'msg-123'}]}
     assert 'Sending WhatsApp message to 919999999999 via https://graph.facebook.com/v23.0/123/messages' in caplog.text
-    assert 'Status Code: 200' in caplog.text
-    assert 'Response:' in caplog.text
-    assert 'msg-123' in caplog.text
+    assert 'Request URL:' in caplog.text
+    assert 'Request JSON payload:' in caplog.text
+    assert 'Recipient phone number: 919999999999' in caplog.text
+    assert 'HTTP status code:' in caplog.text
+    assert 'Full response JSON:' in caplog.text
+    assert 'Message ID: msg-123' in caplog.text
+
+
+def test_send_whatsapp_logs_template_details(monkeypatch, caplog):
+    class DummyConfig:
+        is_valid = True
+        access_token = 'token'
+        api_url = 'https://graph.facebook.com/v23.0/123/messages'
+        default_country_code = '+91'
+
+    class DummyResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = str(payload)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise Exception('bad request')
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers, json, timeout):
+        return DummyResponse(200, {'messages': [{'id': 'msg-template-123'}]})
+
+    monkeypatch.setattr(whatsapp_service, 'requests', type('RequestsStub', (), {'post': staticmethod(fake_post)}))
+
+    with caplog.at_level(logging.INFO):
+        whatsapp_service.send_whatsapp_message(
+            DummyConfig(),
+            '9999999999',
+            'template',
+            {
+                'template': {
+                    'name': 'order_confirmation',
+                    'language': {'code': 'en_US'},
+                    'components': [
+                        {'type': 'body', 'parameters': [{'type': 'text', 'text': 'Kiran Traders'}]}
+                    ],
+                }
+            },
+        )
+
+    assert 'Template name: order_confirmation' in caplog.text
+    assert 'Language: en_US' in caplog.text
+    assert 'Template parameters:' in caplog.text
+    assert 'Kiran Traders' in caplog.text
