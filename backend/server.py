@@ -19,10 +19,7 @@ import qrcode
 import smtplib
 import requests
 
-import auth
-import audit
-import dependencies
-import security
+from backend import auth, audit, dependencies, security
 from backend.config.whatsapp import get_whatsapp_config
 from backend.services.whatsapp_service import build_whatsapp_number, send_text_message, send_whatsapp_via_twilio
 from email.message import EmailMessage
