@@ -7,7 +7,7 @@ import { Button } from '../../components/ui/button';
 import { ShoppingBag, IndianRupee, Users, Package, TrendingUp, AlertTriangle } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from 'recharts';
 
-const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', shipped: 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
+const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
@@ -53,7 +53,7 @@ export default function AdminDashboard() {
         {[
           { label: 'Pending', val: stats.pending_orders, color: 'bg-amber-500/10 text-amber-700 border-amber-500/20' },
           { label: 'Confirmed', val: stats.confirmed_orders, color: 'bg-sky-500/10 text-sky-700 border-sky-500/20' },
-          { label: 'Shipped', val: stats.shipped_orders, color: 'bg-purple-500/10 text-purple-700 border-purple-500/20' },
+          { label: 'Out for Delivery', val: stats.out_for_delivery_orders, color: 'bg-purple-500/10 text-purple-700 border-purple-500/20' },
           { label: 'Delivered', val: stats.delivered_orders, color: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20' },
           { label: 'Low Stock', val: stats.low_stock, color: 'bg-red-500/10 text-red-700 border-red-500/20' },
         ].map(k => (

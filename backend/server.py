@@ -188,7 +188,7 @@ class PaymentVerifyRequest(BaseModel):
     razorpay_signature: str
 
 class OrderStatusUpdate(BaseModel):
-    status: str  # pending | confirmed | processing | packed | shipped | out for delivery | delivered | cancelled
+    status: str  # pending | confirmed | processing | packed | out for delivery | delivered | cancelled
     tracking_note: Optional[str] = ''
 
 class TrackOrderRequest(BaseModel):
@@ -769,7 +769,7 @@ async def get_order(oid: str, _: Dict = Depends(require_admin)):
 
 @api_router.put('/orders/{oid}/status')
 async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
-    valid = ['pending', 'confirmed', 'processing', 'packed', 'shipped', 'out for delivery', 'delivered', 'cancelled']
+    valid = ['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
     if upd.status not in valid:
         raise HTTPException(status_code=400, detail='Invalid status')
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
@@ -955,7 +955,6 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
 STATUS_WHATSAPP_TEMPLATES = {
     'confirmed': "Hi {name},\n\nYour order #{order_id} has been confirmed.",
     'packed': "Hi {name},\n\nYour order #{order_id} has been packed and is ready for dispatch.",
-    'shipped': "Hi {name},\n\nYour order #{order_id} has been shipped and is on its way.",
     'out for delivery': "Hi {name},\n\nYour order #{order_id} is out for delivery and should arrive shortly.",
     'delivered': "Hi {name},\n\nYour order #{order_id} has been delivered successfully.\n\nThank you for shopping with Kiran Traders.",
     'cancelled': "Hi {name},\n\nUnfortunately your order #{order_id} has been cancelled.\n\nPlease contact us if you have any questions.",
@@ -1237,7 +1236,7 @@ async def admin_stats(_: Dict = Depends(require_admin)):
     total_orders = await db.orders.count_documents({})
     pending = await db.orders.count_documents({'status': 'pending'})
     confirmed = await db.orders.count_documents({'status': 'confirmed'})
-    shipped = await db.orders.count_documents({'status': 'shipped'})
+    out_for_delivery = await db.orders.count_documents({'status': 'out for delivery'})
     delivered = await db.orders.count_documents({'status': 'delivered'})
     total_products = await db.products.count_documents({'active': True})
     low_stock = await db.products.count_documents({'stock': {'$lt': 10}, 'active': True})
@@ -1275,7 +1274,7 @@ async def admin_stats(_: Dict = Depends(require_admin)):
         'total_orders': total_orders,
         'pending_orders': pending,
         'confirmed_orders': confirmed,
-        'shipped_orders': shipped,
+        'out_for_delivery_orders': out_for_delivery,
         'delivered_orders': delivered,
         'total_products': total_products,
         'low_stock': low_stock,

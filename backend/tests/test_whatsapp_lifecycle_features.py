@@ -39,9 +39,6 @@ def test_status_update_templates_match_spec():
     assert server.build_status_update_message('Alice', 'KT123', 'packed', 'Kiran Traders') == (
         "Hi Alice,\n\nYour order #KT123 has been packed and is ready for dispatch."
     )
-    assert server.build_status_update_message('Alice', 'KT123', 'shipped', 'Kiran Traders') == (
-        "Hi Alice,\n\nYour order #KT123 has been shipped and is on its way."
-    )
     assert server.build_status_update_message('Alice', 'KT123', 'out for delivery', 'Kiran Traders') == (
         "Hi Alice,\n\nYour order #KT123 is out for delivery and should arrive shortly."
     )

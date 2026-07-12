@@ -14,7 +14,7 @@ const STEPS = [
   { key: 'pending', label: 'Order Placed', icon: Clock },
   { key: 'confirmed', label: 'Confirmed', icon: CheckCircle2 },
   { key: 'packed', label: 'Packed', icon: Package },
-  { key: 'shipped', label: 'Shipped', icon: Truck },
+  { key: 'out for delivery', label: 'Out for Delivery', icon: Truck },
   { key: 'delivered', label: 'Delivered', icon: CheckCircle2 },
 ];
 

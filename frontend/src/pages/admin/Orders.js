@@ -8,7 +8,7 @@ import { Tabs, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Search } from 'lucide-react';
 
-const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', shipped: 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
+const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
 
 export default function AdminOrders() {
   const [sp, setSp] = useSearchParams();
@@ -43,7 +43,7 @@ export default function AdminOrders() {
       </div>
       <Tabs value={status} onValueChange={setStatus} data-testid="admin-orders-status-tabs">
         <TabsList className="flex-wrap h-auto">
-          {['all', 'pending', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled'].map(s => (
+          {['all', 'pending', 'confirmed', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => (
             <TabsTrigger key={s} value={s} className="capitalize">{s}</TabsTrigger>
           ))}
         </TabsList>
