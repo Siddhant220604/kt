@@ -1496,102 +1496,331 @@ async def admin_stats(_: Dict = Depends(require_admin)):
 # ------------------ INVOICE PDF ------------------
 
 def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
+    """Build a professional, GST-compliant invoice PDF matching traditional invoice book format."""
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=15*mm, leftMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=10*mm, leftMargin=10*mm, topMargin=10*mm, bottomMargin=10*mm)
     styles = getSampleStyleSheet()
-    small = ParagraphStyle('small', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#3d2c22'))
-    h1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=20, textColor=colors.HexColor('#8b4a2b'))
+    
+    # Define custom styles for professional invoice
+    title_style = ParagraphStyle('title', parent=styles['Normal'], fontSize=18, fontName='Helvetica-Bold', textColor=colors.black)
+    subtitle_style = ParagraphStyle('subtitle', parent=styles['Normal'], fontSize=8, fontName='Helvetica', textColor=colors.black)
+    label_style = ParagraphStyle('label', parent=styles['Normal'], fontSize=7, fontName='Helvetica-Bold', textColor=colors.black)
+    value_style = ParagraphStyle('value', parent=styles['Normal'], fontSize=7, fontName='Helvetica', textColor=colors.black)
+    section_title = ParagraphStyle('section', parent=styles['Normal'], fontSize=8, fontName='Helvetica-Bold', textColor=colors.black, borderPadding=2)
+    table_header = ParagraphStyle('theader', parent=styles['Normal'], fontSize=7, fontName='Helvetica-Bold', textColor=colors.black, alignment=1)
+    table_data = ParagraphStyle('tdata', parent=styles['Normal'], fontSize=7, fontName='Helvetica', textColor=colors.black)
+    
     story = []
-    bname = settings.get('business_name', 'Kiran Traders')
-    logo_data = settings.get('logo')
-    if logo_data:
-        try:
-            b64_data = logo_data.split(',', 1)[1] if ',' in logo_data else logo_data
-            logo_img = Image(io.BytesIO(base64.b64decode(b64_data)), width=25 * mm, height=25 * mm)
-            logo_img.hAlign = 'LEFT'
-            story.append(logo_img)
-            story.append(Spacer(1, 4))
-        except Exception:
-            logger.warning('Invoice logo could not be decoded/embedded; continuing without it')
-    story.append(Paragraph(f'<b>{bname}</b>', h1))
-    story.append(Paragraph(settings.get('tagline', 'Wholesale & Retail Packaging Essentials - Since 1996'), small))
-    story.append(Paragraph(settings.get('address', 'Sector K, 805-D, Aashiyana, Lucknow, UP'), small))
-    contact_line = ' | '.join(filter(None, [settings.get('phone'), settings.get('email'), settings.get('gstin')]))
-    if contact_line:
-        story.append(Paragraph(contact_line, small))
-    story.append(Spacer(1, 8))
-    story.append(Paragraph(f'<b>TAX INVOICE / BILL</b>', styles['Heading3']))
-    story.append(Spacer(1, 4))
-
-    addr = order.get('address', {})
-    info = [
-        ['Invoice No:', order.get('id', ''), 'Order ID:', order.get('id', '')],
-        ['Date:', order.get('created_at', '')[:10], 'Payment:', order.get('payment_method', '').upper()],
-        ['Order Status:', order.get('status', '').title(), '', ''],
-    ]
-    t = Table(info, colWidths=[30*mm, 60*mm, 25*mm, 60*mm])
-    t.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 9),
-        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#3d2c22')),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 8))
-    story.append(Paragraph('<b>Bill To:</b>', small))
-    addr_lines = [
-        addr.get('name', ''),
-        f"{addr.get('address_line1', '')} {addr.get('address_line2', '')}".strip(),
-        f"{addr.get('city', '')}, {addr.get('state', '')} - {addr.get('pincode', '')}",
-        f"Mobile: {addr.get('mobile', '')}",
-    ]
-    if addr.get('email'):
-        addr_lines.append(f"Email: {addr.get('email')}")
-    if addr.get('gst_number'):
-        addr_lines.append(f"GSTIN: {addr.get('gst_number')}")
-    for ln in addr_lines:
-        story.append(Paragraph(ln, small))
-    story.append(Spacer(1, 8))
-
-    items_data = [['#', 'Item', 'Size', 'Qty', 'Rate', 'Amount']]
-    for i, it in enumerate(order.get('items', []), 1):
-        items_data.append([str(i), it.get('name', ''), it.get('size', '') or '-', str(it.get('quantity', 0)), f"Rs.{it.get('price', 0):.2f}", f"Rs.{it.get('total', 0):.2f}"])
-    items_table = Table(items_data, colWidths=[10*mm, 75*mm, 25*mm, 15*mm, 25*mm, 30*mm])
-    items_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0dcc8')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#5a3820')),
-        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 9),
-        ('FONT', (0, 1), (-1, -1), 'Helvetica', 9),
-        ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#d4b896')),
-        ('ALIGN', (3, 1), (-1, -1), 'RIGHT'),
+    
+    # ==================== HEADER SECTION ====================
+    bname = settings.get('business_name', 'KIRAN TRADERS')
+    gstin = settings.get('gstin', '')
+    pan = settings.get('pan', '')
+    address = settings.get('address', '')
+    phone = settings.get('phone', '')
+    phone2 = settings.get('phone2', '')
+    email = settings.get('email', '')
+    website = settings.get('website', '')
+    
+    # Main header with business name
+    header_data = [[Paragraph(f'<b>{bname}</b>', title_style), '', '', Paragraph('<b>TAX INVOICE</b>', ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=10, fontName='Helvetica-Bold', textColor=colors.black))]]
+    header_table = Table(header_data, colWidths=[140*mm, 10*mm, 10*mm, 30*mm])
+    header_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 8),
+    ]))
+    story.append(header_table)
+    
+    # Business details
+    story.append(Spacer(1, 2))
+    business_info = f'{address}'
+    story.append(Paragraph(business_info, subtitle_style))
+    
+    contact_info = []
+    if phone:
+        contact_info.append(f'<b>Phone:</b> {phone}')
+    if phone2:
+        contact_info.append(f'<b>Ph:</b> {phone2}')
+    if email:
+        contact_info.append(f'<b>Email:</b> {email}')
+    if contact_info:
+        story.append(Paragraph(' | '.join(contact_info), subtitle_style))
+    
+    gstin_pan_info = []
+    if gstin:
+        gstin_pan_info.append(f'<b>GSTIN:</b> {gstin}')
+    if pan:
+        gstin_pan_info.append(f'<b>PAN:</b> {pan}')
+    if gstin_pan_info:
+        story.append(Paragraph(' | '.join(gstin_pan_info), subtitle_style))
+    
+    story.append(Spacer(1, 4))
+    
+    # ==================== COPY BOXES & INVOICE DETAILS ====================
+    addr = order.get('address', {})
+    invoice_date = order.get('created_at', '')[:10] if order.get('created_at') else ''
+    
+    # Create top section with copy boxes on right and invoice details on left
+    copy_box_width = 20*mm
+    copy_box_height = 12*mm
+    
+    top_section = []
+    
+    # Left: Invoice Details
+    invoice_details = [
+        ['<b>Invoice No.</b>', order.get('id', '')],
+        ['<b>Date of Issue</b>', invoice_date],
+        ['<b>Place of Supply</b>', addr.get('state', '')],
+        ['<b>State Code</b>', addr.get('state_code', '')],
+        ['<b>Mode of Transport</b>', order.get('transport_mode', '')],
+        ['<b>Date of Supply</b>', invoice_date],
+    ]
+    
+    invoice_table = Table(invoice_details, colWidths=[45*mm, 75*mm])
+    invoice_table.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 7),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+    ]))
+    
+    # Right: Copy boxes
+    copy_boxes_data = [
+        [Paragraph('<b>ORIGINAL</b><br/>For Receiver', ParagraphStyle('copy_box', parent=styles['Normal'], fontSize=6, fontName='Helvetica-Bold', alignment=1)),
+         Paragraph('<b>DUPLICATE</b><br/>For Transporter', ParagraphStyle('copy_box', parent=styles['Normal'], fontSize=6, fontName='Helvetica-Bold', alignment=1)),
+         Paragraph('<b>TRIPLICATE</b><br/>For Supplier', ParagraphStyle('copy_box', parent=styles['Normal'], fontSize=6, fontName='Helvetica-Bold', alignment=1))]
+    ]
+    
+    copy_boxes_table = Table(copy_boxes_data, colWidths=[20*mm, 20*mm, 20*mm])
+    copy_boxes_table.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 6),
+        ('HEIGHT', (0, 0), (-1, -1), 16*mm),
+    ]))
+    
+    # Combine invoice details and copy boxes
+    combined_header = [[invoice_table, copy_boxes_table]]
+    combined_table = Table(combined_header, colWidths=[120*mm, 60*mm])
+    combined_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+    story.append(combined_table)
+    story.append(Spacer(1, 6))
+    
+    # ==================== BILL TO SECTION ====================
+    bill_to_data = [
+        ['<b>BILL TO (Receiver)</b>'],
+        [f"{addr.get('name', '')}"],
+        [f"{addr.get('address_line1', '')} {addr.get('address_line2', '')}".strip()],
+        [f"{addr.get('city', '')}, {addr.get('state', '')} - {addr.get('pincode', '')}"],
+    ]
+    
+    bill_to_details = []
+    if addr.get('mobile'):
+        bill_to_details.append(f"<b>Mobile:</b> {addr.get('mobile')}")
+    if addr.get('email'):
+        bill_to_details.append(f"<b>Email:</b> {addr.get('email')}")
+    if addr.get('gst_number'):
+        bill_to_details.append(f"<b>GSTIN:</b> {addr.get('gst_number')}")
+    
+    if bill_to_details:
+        bill_to_data.append([' | '.join(bill_to_details)])
+        
+    bill_to_table = Table(bill_to_data, colWidths=[180*mm])
+    bill_to_table.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 7),
+        ('FONT', (0, 0), (0, 0), 'Helvetica-Bold', 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+    story.append(bill_to_table)
+    story.append(Spacer(1, 4))
+    
+    # ==================== ITEMS TABLE ====================
+    items_data = [['Sl. No.', 'Product Description', 'HSN Code', 'UOM', 'Quantity', 'Rate (Rs.)', 'Amount (Rs.)']]
+    
+    total_taxable = 0
+    for i, item in enumerate(order.get('items', []), 1):
+        items_data.append([
+            str(i),
+            item.get('name', ''),
+            item.get('hsn_code', ''),
+            item.get('uom', 'UNIT'),
+            str(item.get('quantity', 0)),
+            f"{item.get('price', 0):.2f}",
+            f"{item.get('total', 0):.2f}"
+        ])
+        total_taxable += item.get('total', 0)
+    
+    # Items table styling
+    items_table = Table(items_data, colWidths=[12*mm, 80*mm, 20*mm, 15*mm, 20*mm, 18*mm, 18*mm])
+    items_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e0e0e0')),
+        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 7),
+        ('FONT', (0, 1), (-1, -1), 'Helvetica', 7),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
     ]))
     story.append(items_table)
-    story.append(Spacer(1, 10))
-
-    totals = [
-        ['Subtotal:', f"Rs.{order.get('subtotal', 0):.2f}"],
+    story.append(Spacer(1, 4))
+    
+    # ==================== TOTALS SECTION ====================
+    subtotal = order.get('subtotal', 0)
+    discount = order.get('discount', 0)
+    tax = order.get('tax', 0)
+    shipping = order.get('shipping', 0)
+    grand_total = order.get('total', 0)
+    tax_rate = order.get('tax_rate', 0)
+    
+    # Calculate CGST, SGST, IGST
+    is_interstate = order.get('is_interstate', False)
+    cgst = 0
+    sgst = 0
+    igst = 0
+    
+    if tax > 0:
+        if is_interstate:
+            igst = tax
+        else:
+            cgst = tax / 2
+            sgst = tax / 2
+    
+    totals_data = [
+        ['<b>Taxable Amount</b>', f"Rs. {total_taxable:.2f}"],
     ]
-    if order.get('discount', 0):
-        totals.append(['Discount (' + (order.get('coupon_code') or '') + '):', f"-Rs.{order.get('discount', 0):.2f}"])
-    if order.get('tax', 0):
-        totals.append([f"GST ({order.get('tax_rate', 0)}%):", f"Rs.{order.get('tax', 0):.2f}"])
-    if order.get('shipping', 0):
-        totals.append(['Delivery Charge:', f"Rs.{order.get('shipping', 0):.2f}"])
-    totals.append(['GRAND TOTAL:', f"Rs.{order.get('total', 0):.2f}"])
-    tt = Table(totals, colWidths=[140*mm, 40*mm])
-    tt.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 9),
-        ('FONT', (0, -1), (-1, -1), 'Helvetica-Bold', 11),
-        ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#8b4a2b')),
-        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
-        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#8b4a2b')),
-        ('TOPPADDING', (0, -1), (-1, -1), 4),
+    
+    if discount > 0:
+        totals_data.append([f'Discount {("(" + order.get("coupon_code") + ")") if order.get("coupon_code") else ""}', f"-Rs. {discount:.2f}"])
+    
+    if cgst > 0:
+        totals_data.append([f'CGST ({tax_rate/2}%)', f"Rs. {cgst:.2f}"])
+    if sgst > 0:
+        totals_data.append([f'SGST ({tax_rate/2}%)', f"Rs. {sgst:.2f}"])
+    if igst > 0:
+        totals_data.append([f'IGST ({tax_rate}%)', f"Rs. {igst:.2f}"])
+    
+    if shipping > 0:
+        totals_data.append(['Shipping/Delivery Charges', f"Rs. {shipping:.2f}"])
+    
+    totals_data.append(['<b>GRAND TOTAL</b>', f"<b>Rs. {grand_total:.2f}</b>"])
+    
+    totals_table = Table(totals_data, colWidths=[140*mm, 40*mm])
+    totals_table.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 7),
+        ('FONT', (0, -1), (-1, -1), 'Helvetica-Bold', 8),
+        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#e0e0e0')),
     ]))
-    story.append(tt)
-    story.append(Spacer(1, 12))
-    if order.get('notes'):
-        story.append(Paragraph(f"<b>Notes:</b> {order['notes']}", small))
-        story.append(Spacer(1, 6))
-    story.append(Paragraph('Thank you for choosing Kiran Traders. Trusted in Lucknow since 1996.', small))
+    story.append(totals_table)
+    story.append(Spacer(1, 4))
+    
+    # ==================== AMOUNT IN WORDS ====================
+    try:
+        from num2words import num2words
+        amount_words = num2words(int(grand_total), lang='en').title()
+    except:
+        amount_words = f"{grand_total:.2f}"
+    
+    story.append(Paragraph(f'<b>Amount in Words:</b> {amount_words} Rupees Only', value_style))
+    story.append(Spacer(1, 3))
+    
+    # ==================== PAYMENT STATUS ====================
+    if order.get('payment_method') == 'online':
+        story.append(Paragraph(f'<b>Payment Status:</b> PAID | <b>Payment Method:</b> {order.get("payment_gateway", "Online").upper()}', value_style))
+        if order.get('transaction_id'):
+            story.append(Paragraph(f'<b>Transaction ID:</b> {order.get("transaction_id")}', value_style))
+    elif order.get('payment_method') == 'cod':
+        story.append(Paragraph('<b>Payment Status:</b> CASH ON DELIVERY', value_style))
+    
+    story.append(Spacer(1, 4))
+    
+    # ==================== BANK DETAILS ====================
+    bank_details = settings.get('bank_details', '')
+    if bank_details:
+        story.append(Paragraph('<b>Bank Details:</b>', label_style))
+        for line in bank_details.split('\n'):
+            if line.strip():
+                story.append(Paragraph(line.strip(), value_style))
+        story.append(Spacer(1, 3))
+    
+    # ==================== TERMS & CONDITIONS & FOOTER ====================
+    story.append(Spacer(1, 2))
+    
+    # Terms and conditions
+    tac_data = [
+        ['<b>Terms & Conditions:</b>'],
+        ['1. Goods once sold will not be taken back.'],
+        ['2. Subject to Lucknow jurisdiction only.'],
+        ['E.&O.E.'],
+    ]
+    
+    tac_table = Table(tac_data, colWidths=[90*mm, 90*mm])
+    tac_table.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 6),
+        ('FONT', (0, 0), (0, 0), 'Helvetica-Bold', 7),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ('LEFTPADDING', (0, 0), (-1, -1), 1),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 1),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+    
+    # Signature section
+    sig_data = [
+        ['<b>FOR KIRAN TRADERS</b>'],
+        [''],
+        ['Authorized Signatory'],
+    ]
+    
+    sig_table = Table(sig_data, colWidths=[90*mm])
+    sig_table.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 7),
+        ('FONT', (0, 0), (0, 0), 'Helvetica-Bold', 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ('LEFTPADDING', (0, 0), (-1, -1), 1),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 1),
+        ('HEIGHT', (0, 1), (0, 1), 18*mm),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ]))
+    
+    # Combine TAC and signature
+    footer_data = [[tac_table, sig_table]]
+    footer_table = Table(footer_data, colWidths=[90*mm, 90*mm])
+    footer_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+    story.append(footer_table)
+    
+    # Build PDF
     doc.build(story)
     return buf.getvalue()
 
