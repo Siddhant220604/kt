@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Container, Section } from '../components/site/Section';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { PasswordInput } from '../components/ui/password-input';
 import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
 import { LockKeyhole } from 'lucide-react';
@@ -41,7 +42,7 @@ export default function SignIn() {
           <p className="text-sm text-muted-foreground text-center mt-1">Log in to continue to checkout and view your orders.</p>
           <div className="mt-5 space-y-3">
             <div><Label className="text-xs text-muted-foreground">Email</Label><Input required type="email" autoComplete="off" value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} data-testid="signin-email-input" /></div>
-            <div><Label className="text-xs text-muted-foreground">Password</Label><Input required type="password" autoComplete="off" value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} data-testid="signin-password-input" /></div>
+            <div><Label className="text-xs text-muted-foreground">Password</Label><PasswordInput required autoComplete="off" value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} data-testid="signin-password-input" /></div>
             <Button type="submit" className="w-full" disabled={loading} data-testid="signin-submit">{loading ? 'Signing in...' : 'Sign in'}</Button>
           </div>
           <p className="text-sm text-center text-muted-foreground mt-4">

@@ -27,7 +27,7 @@ import audit
 import dependencies
 import security
 from config.whatsapp import get_whatsapp_config
-from services.whatsapp_service import build_whatsapp_number, send_text_message
+from services.whatsapp_service import build_whatsapp_number, send_text_message, send_template_message
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
@@ -1076,6 +1076,11 @@ async def customer_signup(req: CustomerSignupIn, request: Request):
     if await db.customers.find_one({'email': email}):
         raise HTTPException(status_code=400, detail='An account with this email already exists')
     mobile = ''.join(ch for ch in req.mobile if ch.isdigit())
+    # Mobile must be unique too, not just email: _link_past_orders_to_customer backfills orders
+    # by matching mobile OR email, so two accounts sharing a mobile number could otherwise end
+    # up with each other's order history silently mixed together.
+    if await db.customers.find_one({'mobile': mobile}):
+        raise HTTPException(status_code=400, detail='An account with this mobile number already exists')
     cid = str(uuid.uuid4())
     doc = {
         'id': cid,
@@ -1134,6 +1139,9 @@ async def update_customer_profile(req: CustomerProfileUpdate, payload: Dict = De
             raise HTTPException(status_code=400, detail='Another account already uses this email')
     if 'mobile' in doc:
         doc['mobile'] = ''.join(ch for ch in doc['mobile'] if ch.isdigit())
+        existing = await db.customers.find_one({'mobile': doc['mobile']})
+        if existing and existing['id'] != payload['sub']:
+            raise HTTPException(status_code=400, detail='Another account already uses this mobile number')
     doc['updated_at'] = now_iso()
     await db.customers.update_one({'id': payload['sub']}, {'$set': doc})
     return await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0})
@@ -1449,6 +1457,28 @@ async def delete_review(rid: str, request: Request, payload: Dict = Depends(requ
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_review', rid)
     return {'ok': True}
 
+# ------------------ WHATSAPP APPROVED TEMPLATES (Meta WhatsApp Manager, Utility category) ------------------
+# Exact template names as approved in Meta WhatsApp Manager. All are approved in English ('en'),
+# which is send_template_message()'s default language_code. Every template here takes the same
+# two body parameters, in order: [customer_name, order_id].
+WHATSAPP_TEMPLATE_ORDER_CONFIRMATION = 'order_confirmation'
+WHATSAPP_TEMPLATE_ORDER_PACKED = 'order_packed'
+WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY = 'order_out_for_delivery'
+WHATSAPP_TEMPLATE_ORDER_DELIVERED = 'order_delivered'
+WHATSAPP_TEMPLATE_INVOICE_READY = 'invoice_ready'
+WHATSAPP_TEMPLATE_REVIEW_REQUEST = 'review_request'
+
+# Order statuses that have an approved lifecycle template. Statuses without one (e.g. 'cancelled',
+# 'pending', 'processing') keep using the free-form text fallback in build_status_update_message()/
+# STATUS_WHATSAPP_TEMPLATES below, unchanged from before this migration.
+STATUS_TO_WHATSAPP_TEMPLATE = {
+    'confirmed': WHATSAPP_TEMPLATE_ORDER_CONFIRMATION,
+    'packed': WHATSAPP_TEMPLATE_ORDER_PACKED,
+    'out for delivery': WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY,
+    'delivered': WHATSAPP_TEMPLATE_ORDER_DELIVERED,
+}
+
+
 def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
     address = order.get('address') or {}
     mobile = str(address.get('mobile') or '').strip()
@@ -1462,18 +1492,7 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
         return
 
     order_id = order.get('id') or order.get('order_number') or 'N/A'
-    business_name = (settings or {}).get('business_name') or 'Kiran Traders'
-    total = order.get('total') or 0
-    items = order.get('items') or []
-    item_summary = ', '.join(f"{item.get('name', 'Item')} x{item.get('quantity', 1)}" for item in items[:3])
-    if len(items) > 3:
-        item_summary += ' ...'
-
-    msg_body = (
-        f"Hi {address.get('name') or 'Customer'}, your order {order_id} with {business_name} has been received. "
-        f"Total ₹{total:.2f}. Items: {item_summary or 'See order details'}. "
-        "We will send you updates as your order is processed."
-    )
+    customer_name = address.get('name') or 'Customer'
 
     config = get_whatsapp_config()
     if not config.is_valid:
@@ -1481,13 +1500,20 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
         return
 
     try:
-        send_text_message(config, phone, msg_body)
+        # Order placement/receipt notification -> the order_confirmation approved template.
+        send_template_message(
+            phone,
+            WHATSAPP_TEMPLATE_ORDER_CONFIRMATION,
+            body_parameters=[customer_name, order_id],
+            config=config,
+        )
     except Exception as exc:
         logger.error('Failed to send WhatsApp order notification for order %s: %s', order_id, exc)
 
 
-# Feature 1: per-status WhatsApp templates. Statuses without a dedicated template
-# (e.g. 'pending', 'processing') fall back to the generic "is now {status}" message below.
+# Feature 1: per-status WhatsApp text fallback for statuses with no approved template
+# (e.g. 'pending', 'processing', 'cancelled') - see STATUS_TO_WHATSAPP_TEMPLATE above for the
+# statuses that use an approved template instead.
 STATUS_WHATSAPP_TEMPLATES = {
     'confirmed': "Hi {name},\n\nYour order #{order_id} has been confirmed.",
     'packed': "Hi {name},\n\nYour order #{order_id} has been packed and is ready for dispatch.",
@@ -1517,15 +1543,28 @@ def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settin
 
     order_id = order.get('id') or 'N/A'
     business_name = (settings or {}).get('business_name') or 'Kiran Traders'
-    msg_body = build_status_update_message(address.get('name') or 'Customer', order_id, status, business_name)
+    customer_name = address.get('name') or 'Customer'
 
     config = get_whatsapp_config()
     if not config.is_valid:
         logger.warning('WhatsApp Cloud API not configured; status update skipped for order %s', order_id)
         return
 
+    template_name = STATUS_TO_WHATSAPP_TEMPLATE.get(status)
     try:
-        result = send_text_message(config, phone, msg_body)
+        if template_name:
+            # Approved Utility Template for the four lifecycle stages Meta has templates for.
+            result = send_template_message(
+                phone,
+                template_name,
+                body_parameters=[customer_name, order_id],
+                config=config,
+            )
+        else:
+            # No approved template for this status (e.g. 'cancelled', 'pending', 'processing') -
+            # unchanged free-form text fallback, same behavior as before this migration.
+            msg_body = build_status_update_message(customer_name, order_id, status, business_name)
+            result = send_text_message(config, phone, msg_body)
         message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
         logger.info('WhatsApp status update (%s) sent for order %s, message_id=%s', status, order_id, message_id)
     except Exception as exc:
@@ -1618,20 +1657,24 @@ async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str,
         if base.startswith('http://') and 'localhost' not in base and '127.0.0.1' not in base:
             base = 'https://' + base[len('http://'):]
         invoice_url = f"{base}/api/orders/{order_id}/invoice?mobile={mobile}"
-        msg_body = (
-            f"Hi {address.get('name') or 'Customer'},\n\n"
-            "Thank you for your order.\n\n"
-            "Your invoice is ready.\n\n"
-            f"Invoice:\n{invoice_url}\n\n"
-            "Thank you for choosing Kiran Traders."
-        )
+        customer_name = address.get('name') or 'Customer'
 
         config = get_whatsapp_config()
         if not config.is_valid:
             logger.warning('WhatsApp Cloud API not configured; invoice message skipped for order %s', order_id)
             return
 
-        result = await asyncio.to_thread(send_text_message, config, phone, msg_body)
+        # invoice_ready template: document header (the invoice PDF link) + body params
+        # [customer_name, order_id]. invoice_url is a publicly-fetchable link (Meta's servers
+        # need to be able to download it) to the same on-demand PDF endpoint used everywhere else.
+        result = await asyncio.to_thread(
+            send_template_message,
+            phone,
+            WHATSAPP_TEMPLATE_INVOICE_READY,
+            [customer_name, order_id],
+            {'link': invoice_url, 'filename': f'Invoice-{order_id}.pdf'},
+            config,
+        )
         message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
         await db.orders.update_one({'id': order_id}, {'$set': {'invoice_sent': True, 'invoice_sent_at': now_iso()}})
         logger.info('Invoice WhatsApp sent for order %s, message_id=%s', order_id, message_id)
@@ -1696,15 +1739,16 @@ async def _send_review_request_after_delay(order_id: str) -> None:
             logger.info('Review request already claimed for order %s, skipping', order_id)
             return
 
-        msg_body = (
-            f"Hi {address.get('name') or 'Customer'},\n\n"
-            "We hope you enjoyed your purchase from Kiran Traders.\n\n"
-            "Your feedback means a lot to us.\n\n"
-            f"Please leave us a review:\n\n{GOOGLE_REVIEW_LINK}\n\n"
-            "Thank you for supporting our business."
-        )
+        customer_name = address.get('name') or 'Customer'
         try:
-            result = await asyncio.to_thread(send_text_message, config, phone, msg_body)
+            result = await asyncio.to_thread(
+                send_template_message,
+                phone,
+                WHATSAPP_TEMPLATE_REVIEW_REQUEST,
+                [customer_name, order_id],
+                None,
+                config,
+            )
             message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
             logger.info('Review request WhatsApp sent for order %s, message_id=%s', order_id, message_id)
         except Exception as exc:
@@ -2379,22 +2423,34 @@ async def seed_db():
             await db.coupons.insert_one(c)
         logger.info('Seeded coupons')
 
+async def _create_index_safely(collection, *args, **kwargs) -> None:
+    """A single bad index (e.g. a unique index that can't build because existing data already
+    has duplicates) must not take down the rest of startup with it - previously all indexes and
+    start_abandoned_cart_watcher() shared one try/except, so one failure here silently skipped
+    everything after it, including the background watcher ever starting."""
+    try:
+        await collection.create_index(*args, **kwargs)
+    except Exception:
+        logger.exception('Failed to create index %s on %s', args, collection.name)
+
+
 @app.on_event('startup')
 async def on_start():
     try:
         await seed_db()
         # indexes
-        await db.products.create_index('slug')
-        await db.products.create_index('category_id')
-        await db.products.create_index([('name', 'text'), ('description', 'text'), ('tags', 'text')])
-        await db.orders.create_index('id')
-        await db.orders.create_index('address.mobile')
-        await db.categories.create_index('slug')
-        await db.users.create_index('email')
-        await db.audit_logs.create_index([('timestamp', -1)])
-        await db.abandoned_carts.create_index('mobile', unique=True)
-        await db.customers.create_index('email', unique=True)
-        await db.orders.create_index('customer_id')
+        await _create_index_safely(db.products, 'slug')
+        await _create_index_safely(db.products, 'category_id')
+        await _create_index_safely(db.products, [('name', 'text'), ('description', 'text'), ('tags', 'text')])
+        await _create_index_safely(db.orders, 'id')
+        await _create_index_safely(db.orders, 'address.mobile')
+        await _create_index_safely(db.categories, 'slug')
+        await _create_index_safely(db.users, 'email')
+        await _create_index_safely(db.audit_logs, [('timestamp', -1)])
+        await _create_index_safely(db.abandoned_carts, 'mobile', unique=True)
+        await _create_index_safely(db.customers, 'email', unique=True)
+        await _create_index_safely(db.customers, 'mobile', unique=True)
+        await _create_index_safely(db.orders, 'customer_id')
         start_abandoned_cart_watcher()
         logger.info('Startup complete')
     except Exception as e:

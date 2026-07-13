@@ -1,13 +1,18 @@
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
-from config.whatsapp import WhatsAppConfig
+from config.whatsapp import WhatsAppConfig, get_whatsapp_config
 
 logger = logging.getLogger(__name__)
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
+
+# Meta requires business-initiated WhatsApp messages to use a pre-approved template (outside the
+# 24-hour customer-service reply window, plain "text" messages are rejected). All templates used
+# in this project were approved in Meta WhatsApp Manager with this language code.
+DEFAULT_TEMPLATE_LANGUAGE_CODE = 'en'
 
 
 def build_whatsapp_number(mobile: str, default_country_code: str) -> str:
@@ -101,16 +106,94 @@ def send_whatsapp_message(
 
 
 def send_text_message(config: WhatsAppConfig, to_number: str, text: str) -> Dict[str, Any]:
+    """Free-form text message. Only valid inside Meta's 24-hour customer-service window (e.g.
+    an admin replying to a customer who messaged first). Order lifecycle notifications should
+    use send_template_message() instead, which is required for business-initiated messages."""
     return send_whatsapp_message(config, to_number, 'text', {'text': {'body': text}})
 
 
-def send_template_message(config: WhatsAppConfig, to_number: str, template_name: str, language_code: str, components: Optional[list] = None) -> Dict[str, Any]:
+def _build_template_components(
+    body_parameters: Optional[List[Any]] = None,
+    header_document: Optional[Dict[str, str]] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """Builds the `components` array of a WhatsApp template payload.
+
+    - header_document, if given, becomes a `header` component with a document parameter
+      (e.g. the invoice_ready template's PDF attachment).
+    - body_parameters, if given, becomes a `body` component with one text parameter per
+      value, in the same order as the template's {{1}}, {{2}}, ... placeholders.
+    """
+    components: List[Dict[str, Any]] = []
+    if header_document:
+        components.append({
+            'type': 'header',
+            'parameters': [{
+                'type': 'document',
+                'document': {
+                    'link': header_document['link'],
+                    'filename': header_document.get('filename', 'document.pdf'),
+                },
+            }],
+        })
+    if body_parameters:
+        components.append({
+            'type': 'body',
+            'parameters': [{'type': 'text', 'text': str(value)} for value in body_parameters],
+        })
+    return components or None
+
+
+def send_template_message(
+    phone: str,
+    template_name: str,
+    body_parameters: Optional[List[Any]] = None,
+    header_document: Optional[Dict[str, str]] = None,
+    config: Optional[WhatsAppConfig] = None,
+    language_code: str = DEFAULT_TEMPLATE_LANGUAGE_CODE,
+) -> Optional[Dict[str, Any]]:
+    """Reusable helper for sending an approved Meta WhatsApp Utility Template message.
+
+    This is the single place that builds the Cloud API "template" payload - every order
+    lifecycle notification (order_confirmation, order_packed, order_out_for_delivery,
+    order_delivered, invoice_ready, review_request) calls this instead of building its own
+    payload, so the payload shape only has to be correct in one place.
+
+    Args:
+        phone: destination WhatsApp number (normalization happens inside send_whatsapp_message,
+            same as send_text_message - callers don't need to pre-normalize).
+        template_name: exact template name approved in Meta WhatsApp Manager
+            (e.g. "order_confirmation", "invoice_ready").
+        body_parameters: ordered values for the template body's {{1}}, {{2}}, ... placeholders.
+            For this project's templates that's always [customer_name, order_id].
+        header_document: optional {"link": <public PDF URL>, "filename": <str>}; when given,
+            a document header component is attached (used by invoice_ready for the invoice PDF).
+            Omit (or pass None) to send a template with no document header.
+        config: WhatsAppConfig to reuse if the caller already has one; defaults to
+            get_whatsapp_config() so existing call sites don't need to fetch it themselves.
+        language_code: template language code; defaults to "en" per the approved templates.
+
+    Returns:
+        The parsed Graph API JSON response, or None if the send was skipped (WhatsApp not
+        configured) or failed - the same soft-fail style as the rest of this module, so a
+        notification failure never raises into the caller's order/business logic.
+    """
+    config = config or get_whatsapp_config()
+    if not config.is_valid:
+        logger.warning('WhatsApp Cloud API not configured; template "%s" not sent to %s', template_name, phone)
+        return None
+
     payload: Dict[str, Any] = {
         'template': {
             'name': template_name,
             'language': {'code': language_code},
         }
     }
-    if components is not None:
+    components = _build_template_components(body_parameters, header_document)
+    if components:
         payload['template']['components'] = components
-    return send_whatsapp_message(config, to_number, 'template', payload)
+
+    try:
+        return send_whatsapp_message(config, phone, 'template', payload)
+    except Exception:
+        logger.exception('Failed to send WhatsApp template "%s" to %s', template_name, phone)
+        return None
