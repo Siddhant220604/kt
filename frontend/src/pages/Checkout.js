@@ -122,6 +122,13 @@ export default function Checkout() {
           order_id: paymentData.razorpay_order_id,
           prefill: { name: form.name, email: form.email, contact: form.mobile },
           theme: { color: '#4f46e5' },
+          method: {
+            upi: true,
+            card: true,
+            netbanking: true,
+            wallet: true,
+            emandate: false,
+          },
           modal: {
             ondismiss: () => {
               toast.error('Payment was cancelled');
