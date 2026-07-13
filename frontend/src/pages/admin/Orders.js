@@ -56,7 +56,7 @@ export default function AdminOrders() {
       </div>
       <Tabs value={status} onValueChange={setStatus} data-testid="admin-orders-status-tabs">
         <TabsList className="flex-wrap h-auto">
-          {['all', 'pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => (
+          {['all', 'pending', 'confirmed', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => (
             <TabsTrigger key={s} value={s} className="capitalize">{s}</TabsTrigger>
           ))}
         </TabsList>

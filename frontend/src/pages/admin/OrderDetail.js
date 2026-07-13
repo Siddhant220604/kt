@@ -77,7 +77,7 @@ export default function AdminOrderDetail() {
               <Select value={next} onValueChange={setNext}>
                 <SelectTrigger className="w-52" data-testid="admin-status-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
+                  {['pending', 'confirmed', 'packed', 'out for delivery', 'delivered', 'cancelled'].map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Textarea placeholder="Optional note (e.g., courier tracking #)" rows={2} value={note} onChange={(e) => setNote(e.target.value)} className="flex-1 min-w-64" data-testid="admin-status-note" />
