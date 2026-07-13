@@ -77,7 +77,10 @@ export default function AdminOrders() {
                     <td className="py-2.5">{o.items?.length} items</td>
                     <td className="py-2.5 font-medium">{formatINR(o.total)}</td>
                     <td className="py-2.5 uppercase text-xs">{o.payment_method}</td>
-                    <td className="py-2.5"><Badge variant="outline" className={statusColor[o.status] || ''}>{o.status}</Badge></td>
+                    <td className="py-2.5">
+                      <Badge variant="outline" className={statusColor[o.status] || ''}>{o.status}</Badge>
+                      {o.refund_status === 'pending' && <Badge variant="outline" className="ml-1 bg-red-500/10 text-red-700 border-red-500/20">Refund pending</Badge>}
+                    </td>
                     <td className="py-2.5 text-xs text-muted-foreground">{o.created_at?.slice(0, 10)}</td>
                   </tr>
                 ))}

@@ -41,6 +41,8 @@ mccabe==0.7.0
 mdurl==0.1.2
 motor==3.3.1
 multidict==6.7.1
+num2words==0.5.14
+docopt==0.6.2
 packaging==26.2
 passlib==1.7.4
 pathspec==1.1.1

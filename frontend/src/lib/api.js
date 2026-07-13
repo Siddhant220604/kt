@@ -35,8 +35,17 @@ export const logoutAdmin = (message) => {
   }
 };
 
+export const logoutCustomer = () => {
+  localStorage.removeItem('kt_customer_token');
+  localStorage.removeItem('kt_customer_mobile');
+};
+
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('kt_admin_token');
+  // /customer/* endpoints are authenticated with the customer's own OTP-login token, never
+  // the admin token - keeping the two entirely separate even if both happen to be present in
+  // the same browser (e.g. the store owner testing the customer login while still admin-logged-in).
+  const isCustomerPath = typeof config.url === 'string' && config.url.startsWith('/customer/');
+  const token = localStorage.getItem(isCustomerPath ? 'kt_customer_token' : 'kt_admin_token');
   if (token) {
     config.headers = config.headers || {};
     config.headers.Authorization = `Bearer ${token}`;

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, formatINR } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -11,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Plus, Edit, Trash2, X, Image as ImageIcon, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
-const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [] };
+const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [], price_tiers: [] };
 
 const readFileAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
 
@@ -22,6 +23,7 @@ export default function AdminProducts() {
   const [edit, setEdit] = useState(null);
   const [q, setQ] = useState('');
   const [saving, setSaving] = useState(false);
+  const [sp, setSp] = useSearchParams();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,13 +37,34 @@ export default function AdminProducts() {
   useEffect(() => { load(); }, [load]);
 
   const openNew = () => setEdit({ ...empty, category_id: cats[0]?.id || '' });
-  const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specs: p.specs || {}, tags: p.tags || [] });
+  const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specs: p.specs || {}, tags: p.tags || [], price_tiers: p.price_tiers || [] });
+
+  // Deep-link support (e.g. from the dashboard's low-stock list): /admin/products?edit=<id>
+  // opens straight into that product's edit dialog instead of requiring a manual search + click.
+  useEffect(() => {
+    const editId = sp.get('edit');
+    if (editId && data.items.length) {
+      const p = data.items.find(i => i.id === editId);
+      if (p) openEdit(p);
+      const n = new URLSearchParams(sp); n.delete('edit'); setSp(n, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.items]);
 
   const save = async () => {
     if (!edit.name || !edit.category_id) return toast.error('Name and category are required');
     setSaving(true);
     try {
-      const payload = { ...edit, price: Number(edit.price), compare_price: Number(edit.compare_price || 0), moq: Number(edit.moq || 1), stock: Number(edit.stock || 0) };
+      const payload = {
+        ...edit,
+        price: Number(edit.price),
+        compare_price: Number(edit.compare_price || 0),
+        moq: Number(edit.moq || 1),
+        stock: Number(edit.stock || 0),
+        price_tiers: (edit.price_tiers || [])
+          .filter(t => t.min_qty && t.price)
+          .map(t => ({ min_qty: Number(t.min_qty), price: Number(t.price) })),
+      };
       if (edit.id) { await api.put(`/products/${edit.id}`, payload); toast.success('Product updated'); }
       else { await api.post('/products', payload); toast.success('Product created'); }
       setEdit(null); await load();
@@ -50,6 +73,10 @@ export default function AdminProducts() {
   };
 
   const del = async (p) => { if (!window.confirm(`Delete "${p.name}"?`)) return; await api.delete(`/products/${p.id}`); toast.success('Deleted'); load(); };
+
+  const addTier = () => setEdit(e => ({ ...e, price_tiers: [...(e.price_tiers || []), { min_qty: '', price: '' }] }));
+  const setTier = (i, field, v) => setEdit(e => ({ ...e, price_tiers: e.price_tiers.map((t, idx) => idx === i ? { ...t, [field]: v } : t) }));
+  const rmTier = (i) => setEdit(e => ({ ...e, price_tiers: e.price_tiers.filter((_, idx) => idx !== i) }));
 
   const addImage = () => setEdit(e => ({ ...e, images: [...(e.images || []), ''] }));
   const setImage = (i, v) => setEdit(e => ({ ...e, images: e.images.map((x, idx) => idx === i ? v : x) }));
@@ -119,6 +146,23 @@ export default function AdminProducts() {
                 <div><Label className="text-xs text-muted-foreground">MOQ</Label><Input type="number" value={edit.moq} onChange={(e) => setEdit({ ...edit, moq: e.target.value })} /></div>
                 <div><Label className="text-xs text-muted-foreground">Stock</Label><Input type="number" value={edit.stock} onChange={(e) => setEdit({ ...edit, stock: e.target.value })} data-testid="admin-product-stock" /></div>
               </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">Bulk Pricing Tiers (optional)</Label>
+                  <Button type="button" size="sm" variant="outline" onClick={addTier} data-testid="admin-add-tier"><Plus className="h-3.5 w-3.5 mr-1" />Add tier</Button>
+                </div>
+                {(edit.price_tiers || []).length === 0 && <div className="text-xs text-muted-foreground mt-1">No tiers - base price applies to all quantities.</div>}
+                {(edit.price_tiers || []).map((t, i) => (
+                  <div key={i} className="flex items-center gap-2 mt-2">
+                    <Input type="number" placeholder="Min qty" value={t.min_qty} onChange={(e) => setTier(i, 'min_qty', e.target.value)} data-testid={`admin-tier-minqty-${i}`} />
+                    <span className="text-xs text-muted-foreground shrink-0">units @ Rs.</span>
+                    <Input type="number" placeholder="Price" value={t.price} onChange={(e) => setTier(i, 'price', e.target.value)} data-testid={`admin-tier-price-${i}`} />
+                    <Button type="button" size="icon" variant="ghost" onClick={() => rmTier(i)} className="text-destructive shrink-0"><X className="h-4 w-4" /></Button>
+                  </div>
+                ))}
+              </div>
+
               <div><Label className="text-xs text-muted-foreground">Description</Label><Textarea rows={3} value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></div>
               <div>
                 <Label className="text-xs text-muted-foreground">Images (URLs or upload)</Label>

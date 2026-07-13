@@ -70,6 +70,22 @@ export default function Checkout() {
     fetchCoupons();
   }, []);
 
+  // Opportunistically snapshot the cart once we have a valid mobile number, so an abandoned
+  // checkout can still get a WhatsApp reminder later. Debounced and best-effort - failures here
+  // must never block or interrupt checkout.
+  useEffect(() => {
+    if (!/^[6-9]\d{9}$/.test(form.mobile) || items.length === 0) return;
+    const t = setTimeout(() => {
+      api.post('/cart/sync', {
+        mobile: form.mobile,
+        name: form.name,
+        items: items.map(i => ({ product_id: i.product_id, name: i.name, price: i.price, quantity: i.quantity })),
+        subtotal,
+      }).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [form.mobile, form.name, items, subtotal]);
+
   const applyCoupon = async (code = coupon) => {
     const selected = code.trim();
     if (!selected) return;

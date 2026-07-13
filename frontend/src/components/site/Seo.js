@@ -4,7 +4,7 @@ const SITE_NAME = 'Kiran Traders';
 const DEFAULT_DESCRIPTION = 'Wholesale & Retail Packaging Essentials - Thermocol plates, carry bags, disposables & more. Trusted in Lucknow since 1996.';
 const DEFAULT_IMAGE = 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=1200&q=80';
 
-export default function Seo({ title, description, image, type = 'website', noindex = false }) {
+export default function Seo({ title, description, image, type = 'website', noindex = false, jsonLd = null }) {
   const fullTitle = title ? `${title} | ${SITE_NAME}` : `${SITE_NAME} - Wholesale Packaging Essentials | Lucknow, Since 1996`;
   const desc = description || DEFAULT_DESCRIPTION;
   const img = image || DEFAULT_IMAGE;
@@ -26,6 +26,7 @@ export default function Seo({ title, description, image, type = 'website', noind
       <meta name="twitter:title" content={fullTitle} />
       <meta name="twitter:description" content={desc} />
       <meta name="twitter:image" content={img} />
+      {jsonLd && <script type="application/ld+json">{JSON.stringify(jsonLd)}</script>}
     </Helmet>
   );
 }

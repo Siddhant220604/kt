@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { ShoppingCart, Search, Menu, Heart, Phone, MessageCircle, MapPin, Truck, Sun, Moon, Clock, Package, Home as HomeIcon } from 'lucide-react';
+import { ShoppingCart, Search, Menu, Heart, Phone, MessageCircle, MapPin, Truck, Sun, Moon, Clock, Package, Home as HomeIcon, User } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
@@ -96,6 +96,9 @@ const Header = () => {
             <Button variant="ghost" size="icon" onClick={toggle} data-testid="theme-toggle" aria-label="Toggle theme">
               {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
+            <Link to="/my-orders" data-testid="my-orders-link">
+              <Button variant="ghost" size="icon"><User className="h-5 w-5" /></Button>
+            </Link>
             <Link to="/wishlist" data-testid="wishlist-link">
               <Button variant="ghost" size="icon" className="relative">
                 <Heart className="h-5 w-5" />

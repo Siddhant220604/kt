@@ -93,6 +93,24 @@ export default function AdminDashboard() {
           </div>
         </div>
       </div>
+      {stats.low_stock_products?.length > 0 && (
+        <div className="bg-card border border-border rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-display font-semibold flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-red-600" />Low Stock Products</div>
+            <Link to="/admin/products" className="text-xs text-primary hover:underline">View all products</Link>
+          </div>
+          <div className="space-y-1.5">
+            {stats.low_stock_products.map(p => (
+              <Link key={p.id} to={`/admin/products?edit=${p.id}`} className="flex items-center justify-between text-sm p-2 rounded-lg hover:bg-muted/50 -mx-2">
+                <span className="truncate">{p.name}</span>
+                <Badge variant="outline" className={p.stock === 0 ? 'bg-red-500/10 text-red-700 border-red-500/20' : 'bg-amber-500/10 text-amber-700 border-amber-500/20'}>
+                  {p.stock === 0 ? 'Out of stock' : `${p.stock} left`}
+                </Badge>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="bg-card border border-border rounded-2xl p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="font-display font-semibold">Recent Orders</div>

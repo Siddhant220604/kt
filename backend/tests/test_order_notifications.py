@@ -2,8 +2,6 @@ import logging
 import os
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault('MONGO_URL', 'mongodb://localhost:27017')
 

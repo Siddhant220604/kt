@@ -22,6 +22,7 @@ const OrderSuccess = lazy(() => import('./pages/OrderSuccess'));
 const OrderTracking = lazy(() => import('./pages/OrderTracking'));
 const Contact = lazy(() => import('./pages/Contact'));
 const Wishlist = lazy(() => import('./pages/Wishlist'));
+const MyOrders = lazy(() => import('./pages/MyOrders'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 // Admin
@@ -38,6 +39,7 @@ const AdminBanners = lazy(() => import('./pages/admin/Banners'));
 const AdminReviews = lazy(() => import('./pages/admin/Reviews'));
 const AdminContacts = lazy(() => import('./pages/admin/Contacts'));
 const AdminSettings = lazy(() => import('./pages/admin/Settings'));
+const AdminAuditLog = lazy(() => import('./pages/admin/AuditLog'));
 
 const Loading = () => (
   <div className="flex items-center justify-center min-h-[60vh]">
@@ -68,6 +70,7 @@ function App() {
                       <Route path="/track/:orderId" element={<OrderTracking />} />
                       <Route path="/contact" element={<Contact />} />
                       <Route path="/wishlist" element={<Wishlist />} />
+                      <Route path="/my-orders" element={<MyOrders />} />
                     </Route>
                     <Route path="/admin/login" element={<AdminLogin />} />
                     <Route element={<ProtectedRoute />}>
@@ -85,6 +88,7 @@ function App() {
                         <Route path="/admin/contacts" element={<AdminContacts />} />
                         <Route path="/admin/profile" element={<AdminProfile />} />
                         <Route path="/admin/settings" element={<AdminSettings />} />
+                        <Route path="/admin/audit-log" element={<AdminAuditLog />} />
                       </Route>
                     </Route>
                     <Route path="*" element={<NotFound />} />

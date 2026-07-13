@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Minus, Plus, ShoppingCart, Heart, MessageCircle, Star, ShieldCheck, Truck, Award, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import ProductCard from '../components/ProductCard';
-import { useCart } from '../lib/cart';
+import { useCart, computeUnitPrice } from '../lib/cart';
 import { useWishlist } from '../lib/wishlist';
 import { useSettings } from '../lib/settings';
 
@@ -63,9 +63,37 @@ export default function ProductDetail() {
   const images = product.images && product.images.length ? product.images : [FALLBACK];
   const inStock = (product.stock || 0) > 0;
   const discount = product.compare_price && product.compare_price > product.price ? Math.round((1 - product.price / product.compare_price) * 100) : 0;
-  const changeQty = (delta) => setQty(q => Math.max(product.moq || 1, q + delta));
+  const maxQty = product.stock > 0 ? product.stock : Infinity;
+  const changeQty = (delta) => setQty(q => Math.min(Math.max(product.moq || 1, q + delta), maxQty));
+  const unitPrice = computeUnitPrice(product.price, product.price_tiers, qty);
+  const hasTiers = product.price_tiers && product.price_tiers.length > 0;
 
   const wa = `https://wa.me/${settings.whatsapp || '919876543210'}?text=${encodeURIComponent(`Hi Kiran Traders, I want to enquire bulk price for: ${product.name} (${product.size || ''}). Quantity needed: `)}`;
+
+  // Structured data so Google can show price/stock/rating directly in search results.
+  const productJsonLd = {
+    '@context': 'https://schema.org/',
+    '@type': 'Product',
+    name: product.name,
+    image: images,
+    description: product.short_description || product.description || product.name,
+    sku: product.id,
+    brand: { '@type': 'Brand', name: 'Kiran Traders' },
+    offers: {
+      '@type': 'Offer',
+      url: typeof window !== 'undefined' ? window.location.href : '',
+      priceCurrency: 'INR',
+      price: product.price,
+      availability: inStock ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+    },
+    ...(product.avg_rating > 0 ? {
+      aggregateRating: {
+        '@type': 'AggregateRating',
+        ratingValue: product.avg_rating,
+        reviewCount: product.review_count || 1,
+      },
+    } : {}),
+  };
 
   const submitReview = async (e) => {
     e.preventDefault();
@@ -83,6 +111,7 @@ export default function ProductDetail() {
         description={product.short_description || product.description || `Buy ${product.name} at wholesale prices from Kiran Traders, Lucknow.`}
         image={images[0]}
         type="product"
+        jsonLd={productJsonLd}
       />
       <Section className="pt-6">
         <Container>
@@ -111,14 +140,31 @@ export default function ProductDetail() {
                 {product.avg_rating > 0 && <div className="flex items-center gap-1"><Star className="h-4 w-4 fill-[hsl(var(--brand-marigold))] text-[hsl(var(--brand-marigold))]" />{product.avg_rating} ({product.review_count})</div>}
                 <Badge variant="secondary">MOQ: {product.moq} {product.unit}</Badge>
                 {inStock ? <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20" variant="outline">In Stock</Badge> : <Badge variant="destructive">Out of Stock</Badge>}
+                {inStock && product.stock <= 10 && <span className="text-xs text-amber-600 font-medium">Only {product.stock} left</span>}
               </div>
 
               <div className="mt-5 flex items-end gap-3">
-                <div className="font-display text-3xl md:text-4xl font-bold text-foreground" data-testid="product-detail-price">{formatINR(product.price)}</div>
+                <div className="font-display text-3xl md:text-4xl font-bold text-foreground" data-testid="product-detail-price">{formatINR(unitPrice)}</div>
                 {discount > 0 && <><div className="text-lg text-muted-foreground line-through">{formatINR(product.compare_price)}</div><Badge className="bg-[hsl(var(--brand-marigold))] text-black">-{discount}%</Badge></>}
                 <div className="text-xs text-muted-foreground pb-1">per {product.unit}</div>
+                {unitPrice < product.price && <Badge className="bg-emerald-500/10 text-emerald-700 border-emerald-500/20" variant="outline">Bulk price applied</Badge>}
               </div>
               {product.size && <div className="mt-2 text-sm"><span className="text-muted-foreground">Size:</span> <span className="font-medium">{product.size}</span></div>}
+
+              {hasTiers && (
+                <div className="mt-3 bg-muted/40 border border-border rounded-xl p-3 text-sm">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Bulk Pricing</div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-muted-foreground"><span>{product.moq}-{product.price_tiers[0].min_qty - 1} {product.unit}</span><span>{formatINR(product.price)} / unit</span></div>
+                    {product.price_tiers.map((t, i) => (
+                      <div key={t.min_qty} className={`flex justify-between ${qty >= t.min_qty ? 'text-emerald-600 font-medium' : ''}`}>
+                        <span>{t.min_qty}{product.price_tiers[i + 1] ? `-${product.price_tiers[i + 1].min_qty - 1}` : '+'} {product.unit}</span>
+                        <span>{formatINR(t.price)} / unit</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <p className="mt-4 text-muted-foreground text-sm leading-relaxed">{product.description}</p>
 
@@ -130,7 +176,7 @@ export default function ProductDetail() {
                   <span className="px-4 font-medium min-w-[3rem] text-center" data-testid="qty-value">{qty}</span>
                   <button onClick={() => changeQty(1)} className="px-3 h-full hover:bg-muted" data-testid="qty-increase"><Plus className="h-4 w-4" /></button>
                 </div>
-                <span className="text-xs text-muted-foreground">Total: <b>{formatINR(product.price * qty)}</b></span>
+                <span className="text-xs text-muted-foreground">Total: <b>{formatINR(unitPrice * qty)}</b></span>
               </div>
 
               {/* Actions */}

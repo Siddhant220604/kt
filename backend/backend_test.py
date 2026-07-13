@@ -628,7 +628,7 @@ class KiranTradersAPITester:
             if response.status_code == 200 and response.headers.get('content-type') == 'application/pdf':
                 self.tests_run += 1
                 self.tests_passed += 1
-                self.log(f"✅ Order Invoice PDF - Status: 200, Content-Type: application/pdf", 'PASS')
+                self.log("✅ Order Invoice PDF - Status: 200, Content-Type: application/pdf", 'PASS')
                 return True
             else:
                 self.tests_run += 1

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, status, BackgroundTasks, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request
 from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -7,7 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
+from pydantic import BaseModel, Field, EmailStr, field_validator
 from typing import List, Optional, Any, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -15,7 +15,9 @@ import asyncio
 import csv
 import hashlib
 import hmac
+import secrets
 import io
+import re
 import base64
 import time
 import qrcode
@@ -29,7 +31,7 @@ from config.whatsapp import get_whatsapp_config
 from services.whatsapp_service import build_whatsapp_number, send_text_message
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 
@@ -154,6 +156,10 @@ class CategoryIn(BaseModel):
     image: Optional[str] = ''
     order: int = 0
 
+class PriceTier(BaseModel):
+    min_qty: int = Field(gt=0)
+    price: float = Field(gt=0)
+
 class ProductIn(BaseModel):
     name: str
     slug: Optional[str] = None
@@ -171,6 +177,15 @@ class ProductIn(BaseModel):
     featured: bool = False
     active: bool = True
     tags: List[str] = []
+    # Bulk/wholesale pricing: e.g. [{min_qty: 10, price: 95}, {min_qty: 50, price: 90}] means
+    # the base `price` applies below 10 units, 95 from 10-49, 90 from 50+. Kept sorted by
+    # min_qty ascending so effective_unit_price() can just walk it front-to-back.
+    price_tiers: List[PriceTier] = []
+
+    @field_validator('price_tiers')
+    @classmethod
+    def validate_price_tiers(cls, tiers: List['PriceTier']) -> List['PriceTier']:
+        return sorted(tiers, key=lambda t: t.min_qty)
 
     @field_validator('images')
     @classmethod
@@ -216,6 +231,18 @@ class OrderIn(BaseModel):
     notes: Optional[str] = Field('', max_length=1000)
     coupon_code: Optional[str] = Field('', max_length=50)
 
+class CartSyncItem(BaseModel):
+    product_id: str
+    name: str
+    price: float
+    quantity: int
+
+class CartSyncIn(BaseModel):
+    mobile: str = Field(min_length=10, max_length=15)
+    name: Optional[str] = Field('', max_length=200)
+    items: List[CartSyncItem] = []
+    subtotal: float = 0
+
 class PaymentCreateOrderRequest(BaseModel):
     order_id: str
     amount: Optional[int] = None
@@ -235,6 +262,13 @@ class OrderStatusUpdate(BaseModel):
 class TrackOrderRequest(BaseModel):
     order_id: str = Field(min_length=1, max_length=50)
     mobile: str = Field(min_length=1, max_length=20)
+
+class CustomerOtpRequestIn(BaseModel):
+    mobile: str = Field(min_length=10, max_length=15)
+
+class CustomerOtpVerifyIn(BaseModel):
+    mobile: str = Field(min_length=10, max_length=15)
+    otp: str = Field(min_length=4, max_length=8)
 
 class WhatsAppMessageIn(BaseModel):
     message: str
@@ -361,9 +395,14 @@ async def change_admin_password(req: ChangePasswordRequest, request: Request, pa
     if not u or not auth.verify_password(req.current_password, u.get('password_hash', '')):
         raise HTTPException(status_code=401, detail='Invalid email or password')
     hashed = auth.hash_password(req.new_password)
-    await db.users.update_one({'id': payload['sub']}, {'$set': {'password_hash': hashed}})
+    # Bump token_version so any other still-logged-in session (e.g. an attacker who had the
+    # old password) is invalidated immediately - then issue a fresh token for *this* session
+    # so the admin isn't logged out by their own password change.
+    new_token_version = u.get('token_version', 0) + 1
+    await db.users.update_one({'id': payload['sub']}, {'$set': {'password_hash': hashed, 'token_version': new_token_version}})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'change_password', payload['sub'])
-    return {'ok': True}
+    new_token = create_token(u['id'], u['email'], u.get('role', 'admin'), new_token_version)
+    return {'ok': True, 'token': new_token}
 
 @api_router.post('/admin/profile/logout-all')
 async def logout_all_admin_devices(request: Request, payload: Dict = Depends(require_admin)):
@@ -378,7 +417,7 @@ async def logout_all_admin_devices(request: Request, payload: Dict = Depends(req
 # ------------------ CATEGORIES ------------------
 
 def slugify(s: str) -> str:
-    return ''.join(c if c.isalnum() else '-' for c in s.lower()).strip('-').replace('--', '-')
+    return re.sub(r'-+', '-', ''.join(c if c.isalnum() else '-' for c in s.lower())).strip('-')
 
 
 async def unique_slug(collection, base_slug: str, exclude_id: Optional[str] = None) -> str:
@@ -526,7 +565,7 @@ async def create_product(pr: ProductIn, request: Request, payload: Dict = Depend
     return doc
 
 @api_router.put('/products/{pid}')
-async def update_product(pid: str, pr: ProductIn, request: Request, payload: Dict = Depends(require_admin)):
+async def update_product(pid: str, pr: ProductIn, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
     doc = pr.model_dump()
     doc['slug'] = await unique_slug(db.products, doc.get('slug') or slugify(pr.name), exclude_id=pid)
     doc['updated_at'] = now_iso()
@@ -536,6 +575,7 @@ async def update_product(pid: str, pr: ProductIn, request: Request, payload: Dic
     p = await db.products.find_one({'id': pid}, {'_id': 0})
     cache_invalidate('categories')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_product', pid, {'name': doc.get('name')})
+    background_tasks.add_task(maybe_send_low_stock_alert, pid)
     return p
 
 @api_router.delete('/products/{pid}')
@@ -628,7 +668,11 @@ async def create_razorpay_order(req: PaymentCreateOrderRequest):
     if not order:
         raise HTTPException(status_code=404, detail='Order not found')
 
-    amount = req.amount if req.amount is not None else max(1, int(round(float(order.get('total', 0)) * 100)))
+    # The amount to charge is always derived from the order's own server-computed total,
+    # never from the client - otherwise a caller could request a Razorpay order for a
+    # trivial amount, pay that, and have the (still cryptographically valid) signature
+    # accepted in /payment/verify to mark a much larger order as fully paid.
+    amount = max(1, int(round(float(order.get('total', 0)) * 100)))
     payload = {
         'amount': amount,
         'currency': req.currency or 'INR',
@@ -653,6 +697,11 @@ async def create_razorpay_order(req: PaymentCreateOrderRequest):
         logger.error('Failed to create Razorpay order: %s', exc)
         raise HTTPException(status_code=502, detail='Unable to create Razorpay order right now.') from exc
 
+    # Persist which Razorpay order this local order was billed against, so /payment/verify
+    # can refuse to accept a signature that was actually issued for a *different* order
+    # (otherwise a genuine low-value payment could be replayed to mark a high-value order paid).
+    await db.orders.update_one({'id': order['id']}, {'$set': {'razorpay_order_id': data.get('id')}})
+
     return {
         'order_id': order['id'],
         'razorpay_order_id': data.get('id'),
@@ -673,6 +722,17 @@ async def verify_razorpay_payment(req: PaymentVerifyRequest, request: Request, b
     order = await db.orders.find_one({'id': req.order_id}, {'_id': 0})
     if not order:
         raise HTTPException(status_code=404, detail='Order not found')
+
+    # A valid signature only proves *some* payment was made to *some* Razorpay order - it must also
+    # be the Razorpay order we actually created for this order_id, otherwise a genuine payment on a
+    # cheap order could be replayed here to mark an unrelated, more expensive order as paid.
+    if order.get('razorpay_order_id') != req.razorpay_order_id:
+        logger.warning('Razorpay order_id mismatch for order %s: expected %s, got %s',
+                        req.order_id, order.get('razorpay_order_id'), req.razorpay_order_id)
+        raise HTTPException(status_code=400, detail='Payment does not match this order')
+
+    if order.get('payment_status') == 'paid':
+        return {'ok': True, 'order': order}
 
     await db.orders.update_one({'id': req.order_id}, {'$set': {
         'payment_status': 'paid',
@@ -753,6 +813,101 @@ def _check_duplicate_order(order: 'OrderIn') -> None:
     _recent_order_fingerprints[fp] = now
 
 
+# ------------------ ABANDONED CART NUDGE ------------------
+
+@api_router.post('/cart/sync')
+async def sync_abandoned_cart(req: CartSyncIn, request: Request):
+    """Called opportunistically from the checkout page once the customer has entered a valid
+    mobile number, so we have something to remind them with if they never finish checking out.
+    Not tied to auth/order creation - just a lightweight snapshot, upserted by mobile number."""
+    dependencies.check_rate_limit(request, 'cart_sync', max_requests=30, window_seconds=300)
+    if not req.items:
+        await db.abandoned_carts.delete_one({'mobile': req.mobile})
+        return {'ok': True}
+    await db.abandoned_carts.update_one(
+        {'mobile': req.mobile},
+        {
+            '$set': {
+                'mobile': req.mobile,
+                'name': req.name or '',
+                'items': [i.model_dump() for i in req.items],
+                'subtotal': req.subtotal,
+                'updated_at': now_iso(),
+                'nudge_sent': False,
+            },
+            '$setOnInsert': {'created_at': now_iso()},
+        },
+        upsert=True,
+    )
+    return {'ok': True}
+
+
+ABANDONED_CART_DELAY_SECONDS = int(os.environ.get('ABANDONED_CART_DELAY_SECONDS', str(60 * 60)))
+ABANDONED_CART_CHECK_INTERVAL_SECONDS = int(os.environ.get('ABANDONED_CART_CHECK_INTERVAL_SECONDS', str(15 * 60)))
+
+
+def start_abandoned_cart_watcher() -> None:
+    """Fire-and-forget asyncio task (same pattern as schedule_review_request) that runs for the
+    life of the process, periodically nudging customers who synced a cart but never checked out.
+    Best-effort: on a host that can idle/sleep, a check simply runs late rather than not at all -
+    acceptable for a reminder feature, and much simpler than standing up a separate cron/queue."""
+    task = asyncio.create_task(_abandoned_cart_watch_loop())
+    _background_asyncio_tasks.add(task)
+    task.add_done_callback(_background_asyncio_tasks.discard)
+
+
+async def _abandoned_cart_watch_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(ABANDONED_CART_CHECK_INTERVAL_SECONDS)
+            cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ABANDONED_CART_DELAY_SECONDS)).isoformat()
+            stale = await db.abandoned_carts.find({'nudge_sent': {'$ne': True}, 'updated_at': {'$lte': cutoff}}).to_list(200)
+            for cart in stale:
+                await _send_abandoned_cart_nudge(cart)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception('Abandoned-cart watch loop iteration failed')
+
+
+async def _send_abandoned_cart_nudge(cart: Dict[str, Any]) -> None:
+    mobile = cart.get('mobile', '')
+    try:
+        phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
+        if not phone:
+            await db.abandoned_carts.update_one({'mobile': mobile}, {'$set': {'nudge_sent': True}})
+            return
+        config = get_whatsapp_config()
+        if not config.is_valid:
+            return
+        items = cart.get('items') or []
+        item_names = ', '.join(i.get('name', '') for i in items[:3])
+        more = f' and {len(items) - 3} more item(s)' if len(items) > 3 else ''
+        name = cart.get('name') or 'there'
+        msg = (
+            f'Hi {name}, you left {item_names}{more} in your cart at Kiran Traders. '
+            'Complete your order anytime - just reply here or visit our site to checkout.'
+        )
+        send_text_message(config, phone, msg)
+        await db.abandoned_carts.update_one({'mobile': mobile}, {'$set': {'nudge_sent': True}})
+        logger.info('Abandoned-cart nudge sent to %s', mobile)
+    except Exception:
+        logger.exception('Failed to send abandoned-cart nudge for %s', mobile)
+
+
+def effective_unit_price(product: Dict[str, Any], quantity: int) -> float:
+    """Returns the per-unit price for buying `quantity` of `product`, applying whichever
+    bulk-pricing tier the quantity qualifies for (highest min_qty <= quantity), falling back
+    to the base price. `price_tiers` is stored sorted ascending by min_qty."""
+    price = product.get('price', 0)
+    for tier in product.get('price_tiers') or []:
+        if quantity >= tier.get('min_qty', 0):
+            price = tier.get('price', price)
+        else:
+            break
+    return price
+
+
 @api_router.post('/orders')
 async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
     if not order.items:
@@ -766,15 +921,16 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail=f'Product not found: {it.name}')
         if p.get('stock', 0) < it.quantity:
             raise HTTPException(status_code=400, detail=f'Insufficient stock for {p["name"]}')
+        unit_price = effective_unit_price(p, it.quantity)
         line = {
             'product_id': p['id'],
             'name': p['name'],
-            'price': p['price'],
+            'price': unit_price,
             'size': p.get('size', ''),
             'unit': p.get('unit', 'piece'),
             'image': (p.get('images') or [''])[0],
             'quantity': it.quantity,
-            'total': round(p['price'] * it.quantity, 2),
+            'total': round(unit_price * it.quantity, 2),
         }
         subtotal += line['total']
         validated_items.append(line)
@@ -782,12 +938,16 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
     discount = 0.0
     coupon_code = ''
     if order.coupon_code:
+        # If the coupon the customer applied in the cart can no longer be honoured (expired,
+        # deactivated, or a limited-use code that just got used up), fail loudly here instead
+        # of silently placing the order at full price - the customer saw a discounted total
+        # and must be told it changed, not be charged more without explanation.
         try:
             res = await validate_coupon(CouponValidate(code=order.coupon_code, subtotal=subtotal))
-            discount = res['discount']
-            coupon_code = res['code']
-        except HTTPException:
-            discount = 0.0
+        except HTTPException as e:
+            raise HTTPException(status_code=400, detail=f'Coupon "{order.coupon_code}" is no longer valid: {e.detail}')
+        discount = res['discount']
+        coupon_code = res['code']
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
     tax_rate = settings.get('tax_rate', 0.0)
     shipping_flat = settings.get('shipping_flat', 0.0)
@@ -797,6 +957,9 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
     shipping = 0.0 if (free_ship_above and taxable >= free_ship_above) else shipping_flat
     total = round(taxable + tax + shipping, 2)
     oid = gen_order_id()
+    # GST invoices must split tax as IGST for interstate supply and CGST+SGST for intrastate;
+    # the business is registered in Uttar Pradesh, so any other billing state is interstate.
+    is_interstate = (order.address.state or '').strip().lower() != 'uttar pradesh'
     doc = {
         'id': oid,
         'order_number': oid,
@@ -806,6 +969,7 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
         'payment_status': 'pending',
         'notes': order.notes or '',
         'coupon_code': coupon_code,
+        'is_interstate': is_interstate,
         'subtotal': subtotal,
         'discount': discount,
         'tax': tax,
@@ -831,11 +995,35 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
                 await db.products.update_one({'id': r['product_id']}, {'$inc': {'stock': r['quantity']}})
             raise HTTPException(status_code=400, detail=f"Insufficient stock for {it['name']}")
         reserved.append(it)
-    await db.orders.insert_one(doc)
+
+    # Atomically reserve the coupon use too: a plain check-then-$inc (the old code) lets two
+    # concurrent checkouts both pass the usage_limit check and both increment, overrunning the
+    # limit. Folding the limit check into the update's filter makes it race-safe the same way
+    # stock reservation above is.
     if coupon_code:
-        await db.coupons.update_one({'code': coupon_code}, {'$inc': {'used_count': 1}})
+        coupon_res = await db.coupons.update_one(
+            {
+                'code': coupon_code,
+                '$or': [
+                    {'usage_limit': {'$in': [0, None]}},
+                    {'$expr': {'$lt': ['$used_count', '$usage_limit']}},
+                ],
+            },
+            {'$inc': {'used_count': 1}},
+        )
+        if coupon_res.matched_count == 0:
+            for r in reserved:
+                await db.products.update_one({'id': r['product_id']}, {'$inc': {'stock': r['quantity']}})
+            raise HTTPException(status_code=400, detail=f'Coupon "{coupon_code}" just reached its usage limit. Please remove it and try again.')
+
+    await db.orders.insert_one(doc)
     doc.pop('_id', None)
     background_tasks.add_task(send_order_notification, doc, settings)
+    for it in reserved:
+        background_tasks.add_task(maybe_send_low_stock_alert, it['product_id'], settings)
+    # The customer just completed checkout, so any cart snapshot synced earlier for this
+    # mobile is no longer "abandoned" - drop it so the nudge job doesn't message them later.
+    await db.abandoned_carts.delete_one({'mobile': order.address.mobile})
     return doc
 
 @api_router.post('/orders/track')
@@ -846,6 +1034,70 @@ async def track_order(req: TrackOrderRequest):
     if str(o['address'].get('mobile', '')).strip() != req.mobile.strip():
         raise HTTPException(status_code=403, detail='Mobile number does not match')
     return o
+
+# ------------------ CUSTOMER OTP LOGIN ------------------
+
+CUSTOMER_OTP_EXPIRE_SECONDS = 5 * 60
+CUSTOMER_TOKEN_EXPIRE_DAYS = 30
+
+
+@api_router.post('/customer/auth/request-otp')
+async def request_customer_otp(req: CustomerOtpRequestIn, request: Request):
+    dependencies.check_rate_limit(request, 'customer_otp_request', max_requests=5, window_seconds=15 * 60)
+    mobile = ''.join(ch for ch in req.mobile if ch.isdigit())
+    # Only customers who've actually ordered before can log in - this feature is "see my past
+    # orders", not new-account signup. Respond identically either way so a caller can't use this
+    # endpoint to enumerate which mobile numbers have placed orders.
+    has_order = await db.orders.find_one({'address.mobile': mobile}, {'_id': 0, 'id': 1})
+    if has_order:
+        otp = f'{secrets.randbelow(1_000_000):06d}'
+        await db.customer_otps.update_one(
+            {'mobile': mobile},
+            {'$set': {
+                'otp': otp,
+                'expires_at': (datetime.now(timezone.utc) + timedelta(seconds=CUSTOMER_OTP_EXPIRE_SECONDS)).isoformat(),
+                'attempts': 0,
+            }},
+            upsert=True,
+        )
+        phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
+        config = get_whatsapp_config()
+        if phone and config.is_valid:
+            try:
+                send_text_message(config, phone, f'Your Kiran Traders login code is {otp}. It expires in 5 minutes.')
+            except Exception:
+                logger.exception('Failed to send customer login OTP to %s', mobile)
+    return {'ok': True}
+
+
+@api_router.post('/customer/auth/verify-otp')
+async def verify_customer_otp(req: CustomerOtpVerifyIn, request: Request):
+    dependencies.check_rate_limit(request, 'customer_otp_verify', max_requests=15, window_seconds=15 * 60)
+    mobile = ''.join(ch for ch in req.mobile if ch.isdigit())
+    rec = await db.customer_otps.find_one({'mobile': mobile})
+    if not rec:
+        raise HTTPException(status_code=400, detail='Invalid or expired code. Please request a new one.')
+    if rec.get('attempts', 0) >= 5:
+        await db.customer_otps.delete_one({'mobile': mobile})
+        raise HTTPException(status_code=429, detail='Too many incorrect attempts. Please request a new code.')
+    expires_at = rec.get('expires_at')
+    if not expires_at or datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+        await db.customer_otps.delete_one({'mobile': mobile})
+        raise HTTPException(status_code=400, detail='Code expired. Please request a new one.')
+    if rec.get('otp') != req.otp.strip():
+        await db.customer_otps.update_one({'mobile': mobile}, {'$inc': {'attempts': 1}})
+        raise HTTPException(status_code=400, detail='Incorrect code')
+    await db.customer_otps.delete_one({'mobile': mobile})
+    token = create_token(mobile, mobile, 'customer', 0, expires_delta=timedelta(days=CUSTOMER_TOKEN_EXPIRE_DAYS))
+    return {'token': token, 'mobile': mobile}
+
+
+@api_router.get('/customer/orders')
+async def customer_orders(payload: Dict = Depends(dependencies.require_customer)):
+    mobile = payload.get('sub')
+    orders = await db.orders.find({'address.mobile': mobile}, {'_id': 0}).sort('created_at', -1).to_list(200)
+    return orders
+
 
 @api_router.get('/orders')
 async def list_orders(
@@ -927,6 +1179,7 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
     if upd.status == 'cancelled' and old_status != 'cancelled':
         for it in o.get('items', []):
             await db.products.update_one({'id': it['product_id']}, {'$inc': {'stock': it['quantity']}})
+            background_tasks.add_task(maybe_send_low_stock_alert, it['product_id'])
     elif old_status == 'cancelled' and upd.status != 'cancelled':
         reserved: List[Dict] = []
         for it in o.get('items', []):
@@ -939,10 +1192,18 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
                     await db.products.update_one({'id': r['product_id']}, {'$inc': {'stock': r['quantity']}})
                 raise HTTPException(status_code=400, detail=f"Cannot un-cancel order: insufficient stock for {it['name']}")
             reserved.append(it)
+        for it in reserved:
+            background_tasks.add_task(maybe_send_low_stock_alert, it['product_id'])
 
     hist = o.get('status_history', [])
     hist.append({'status': upd.status, 'at': now_iso(), 'note': upd.tracking_note or ''})
-    await db.orders.update_one({'id': oid}, {'$set': {'status': upd.status, 'status_history': hist, 'updated_at': now_iso()}})
+    update_fields = {'status': upd.status, 'status_history': hist, 'updated_at': now_iso()}
+    # A cancelled order that had already been paid needs a manual refund - flag it so it
+    # doesn't get lost. Refunds themselves happen outside this system (bank transfer/UPI),
+    # an admin marks it done via /orders/{oid}/mark-refunded once actually processed.
+    if upd.status == 'cancelled' and old_status != 'cancelled' and o.get('payment_status') == 'paid':
+        update_fields['refund_status'] = 'pending'
+    await db.orders.update_one({'id': oid}, {'$set': update_fields})
     updated = await db.orders.find_one({'id': oid}, {'_id': 0})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_order_status', oid, {'status': upd.status})
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
@@ -956,14 +1217,27 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
         schedule_review_request(oid)
     return updated
 
-@api_router.get('/orders/{oid}/invoice')
-async def order_invoice(oid: str, mobile: Optional[str] = None):
+@api_router.post('/orders/{oid}/mark-refunded')
+async def mark_order_refunded(oid: str, request: Request, payload: Dict = Depends(require_admin)):
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
         raise HTTPException(status_code=404, detail='Order not found')
-    # public access requires mobile match; admin can call from admin panel with mobile blank if authenticated (not enforced here for simplicity)
-    if mobile is not None:
-        if str(o['address'].get('mobile', '')).strip() != mobile.strip():
+    if o.get('refund_status') != 'pending':
+        raise HTTPException(status_code=400, detail='This order has no pending refund')
+    await db.orders.update_one({'id': oid}, {'$set': {'refund_status': 'refunded', 'refunded_at': now_iso()}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'mark_order_refunded', oid)
+    return await db.orders.find_one({'id': oid}, {'_id': 0})
+
+@api_router.get('/orders/{oid}/invoice')
+async def order_invoice(oid: str, mobile: Optional[str] = None, payload: Optional[Dict] = Depends(dependencies.optional_admin)):
+    o = await db.orders.find_one({'id': oid}, {'_id': 0})
+    if not o:
+        raise HTTPException(status_code=404, detail='Order not found')
+    # Requires either a matching customer mobile number or an authenticated admin session -
+    # omitting `mobile` must never skip the check, or any guessed/leaked order id would
+    # expose the customer's full name, address and order contents to anyone.
+    if not payload:
+        if not mobile or str(o['address'].get('mobile', '')).strip() != mobile.strip():
             raise HTTPException(status_code=403, detail='Mobile mismatch')
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
     pdf = build_invoice_pdf(o, settings)
@@ -1202,6 +1476,44 @@ def send_order_notification(order: Dict[str, Any], settings: Optional[Dict[str, 
     send_order_whatsapp(order, settings)
 
 
+# ------------------ LOW STOCK ALERTS ------------------
+
+LOW_STOCK_THRESHOLD = 10
+
+
+async def maybe_send_low_stock_alert(product_id: str, settings: Optional[Dict[str, Any]] = None) -> None:
+    """Sends a one-time WhatsApp alert to the business's own number the moment a product's stock
+    first drops to/below LOW_STOCK_THRESHOLD, using a `low_stock_alerted` flag on the product so
+    every subsequent order for the same product doesn't re-send it. The flag clears itself once
+    stock rises back above the threshold (e.g. after restocking), so the next dip alerts again.
+    Never raises - a background task, must never affect the order/stock flow it's attached to."""
+    try:
+        p = await db.products.find_one({'id': product_id}, {'_id': 0, 'name': 1, 'stock': 1, 'low_stock_alerted': 1})
+        if not p:
+            return
+        stock = p.get('stock', 0)
+        if stock > LOW_STOCK_THRESHOLD:
+            if p.get('low_stock_alerted'):
+                await db.products.update_one({'id': product_id}, {'$set': {'low_stock_alerted': False}})
+            return
+        if p.get('low_stock_alerted'):
+            return
+
+        settings = settings or await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+        phone = build_whatsapp_number(settings.get('whatsapp', ''), WHATSAPP_DEFAULT_COUNTRY_CODE)
+        if not phone:
+            return
+        config = get_whatsapp_config()
+        if not config.is_valid:
+            return
+        stock_word = 'out of stock' if stock <= 0 else f'down to {stock} units'
+        msg = f'Stock alert: "{p.get("name")}" is {stock_word}. Restock soon to avoid missed sales.'
+        send_text_message(config, phone, msg)
+        await db.products.update_one({'id': product_id}, {'$set': {'low_stock_alerted': True}})
+    except Exception:
+        logger.exception('Low-stock alert failed for product %s', product_id)
+
+
 # ------------------ FEATURE 2: PDF INVOICE + WHATSAPP ------------------
 
 async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str, Any]] = None, base_url: str = '') -> None:
@@ -1239,6 +1551,12 @@ async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str,
             return
 
         base = (base_url or '').rstrip('/')
+        # request.base_url reflects whatever scheme the ASGI server saw, which is http:// if a
+        # TLS-terminating proxy in front of it doesn't forward X-Forwarded-Proto. Force https
+        # for any non-local host so the invoice link (containing the customer's name/address)
+        # sent over WhatsApp is never plain-text over the wire.
+        if base.startswith('http://') and 'localhost' not in base and '127.0.0.1' not in base:
+            base = 'https://' + base[len('http://'):]
         invoice_url = f"{base}/api/orders/{order_id}/invoice?mobile={mobile}"
         msg_body = (
             f"Hi {address.get('name') or 'Customer'},\n\n"
@@ -1430,7 +1748,7 @@ async def send_order_whatsapp_message(
         send_text_message(config, phone, body.message.strip())
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception('Manual WhatsApp send failed for order %s', oid)
         raise HTTPException(status_code=502, detail='Failed to send WhatsApp message')
 
@@ -1448,6 +1766,9 @@ async def admin_stats(_: Dict = Depends(require_admin)):
     delivered = await db.orders.count_documents({'status': 'delivered'})
     total_products = await db.products.count_documents({'active': True})
     low_stock = await db.products.count_documents({'stock': {'$lt': 10}, 'active': True})
+    low_stock_products = await db.products.find(
+        {'stock': {'$lt': 10}, 'active': True}, {'_id': 0, 'id': 1, 'name': 1, 'stock': 1, 'slug': 1}
+    ).sort('stock', 1).limit(10).to_list(10)
     total_customers = len(await db.orders.distinct('address.mobile'))
     revenue_pipeline = [
         {'$match': {'status': {'$ne': 'cancelled'}}},
@@ -1486,6 +1807,7 @@ async def admin_stats(_: Dict = Depends(require_admin)):
         'delivered_orders': delivered,
         'total_products': total_products,
         'low_stock': low_stock,
+        'low_stock_products': low_stock_products,
         'total_customers': total_customers,
         'total_revenue': round(total_revenue, 2),
         'sales_chart': sales_chart,
@@ -1493,23 +1815,49 @@ async def admin_stats(_: Dict = Depends(require_admin)):
         'top_products': top_products,
     }
 
+@api_router.get('/admin/audit-logs')
+async def list_audit_logs(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    action: Optional[str] = None,
+    admin_email: Optional[str] = None,
+    _: Dict = Depends(require_admin),
+):
+    q: Dict[str, Any] = {}
+    if action:
+        q['action'] = action
+    if admin_email:
+        q['admin_email'] = admin_email
+    total = await db.audit_logs.count_documents(q)
+    items = await db.audit_logs.find(q, {'_id': 0}).sort('timestamp', -1).skip((page - 1) * limit).limit(limit).to_list(limit)
+    actions = await db.audit_logs.distinct('action')
+    return {'items': items, 'total': total, 'page': page, 'limit': limit, 'actions': sorted(actions)}
+
 # ------------------ INVOICE PDF ------------------
 
 def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
-    """Build a professional, GST-compliant invoice PDF matching traditional invoice book format."""
+    """Build a GST tax invoice PDF styled after the business's printed invoice-book format."""
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=8*mm, leftMargin=8*mm, topMargin=8*mm, bottomMargin=8*mm)
-    styles = getSampleStyleSheet()
-    
-    # Define custom styles
-    title_style = ParagraphStyle('title', parent=styles['Normal'], fontSize=14, fontName='Helvetica-Bold', textColor=colors.black)
-    normal_style = ParagraphStyle('normal', parent=styles['Normal'], fontSize=6.5, fontName='Helvetica', textColor=colors.black)
-    small_style = ParagraphStyle('small', parent=styles['Normal'], fontSize=6, fontName='Helvetica', textColor=colors.black)
-    bold_style = ParagraphStyle('bold', parent=styles['Normal'], fontSize=6.5, fontName='Helvetica-Bold', textColor=colors.black)
-    
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=9*mm, leftMargin=9*mm, topMargin=9*mm, bottomMargin=9*mm)
+
+    BLACK = colors.black
+
+    def rp(value):
+        s = f"{value:.2f}"
+        rs, p = s.split('.')
+        return rs, p
+
+    name_style = ParagraphStyle('name', fontSize=28, leading=31, fontName='Times-Bold', textColor=BLACK)
+    tax_invoice_style = ParagraphStyle('taxinv', fontSize=16, leading=18, fontName='Helvetica-Bold', textColor=BLACK, alignment=1)
+    small_style = ParagraphStyle('small', fontSize=9, leading=12, fontName='Helvetica', textColor=BLACK)
+    label_style = ParagraphStyle('label', fontSize=9, leading=12, fontName='Helvetica-Bold', textColor=BLACK)
+    bill_header_style = ParagraphStyle('billhdr', fontSize=10, leading=13, fontName='Helvetica-Bold', textColor=BLACK)
+    signature_style = ParagraphStyle('signature', fontSize=15, leading=17, fontName='Times-Italic', textColor=BLACK, alignment=1)
+    small_center_style = ParagraphStyle('smallcenter', fontSize=9, leading=12, fontName='Helvetica', textColor=BLACK, alignment=1)
+    order_id_style = ParagraphStyle('orderid', fontSize=15, leading=17, fontName='Helvetica-Bold', textColor=BLACK)
+
     story = []
-    
-    # ==================== HEADER SECTION ====================
+
     bname = settings.get('business_name', 'KIRAN TRADERS')
     gstin = settings.get('gstin', '')
     pan = settings.get('pan', '')
@@ -1517,281 +1865,309 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     phone = settings.get('phone', '')
     phone2 = settings.get('phone2', '')
     email = settings.get('email', '')
-    
-    # Compact header
-    header_line1 = f'{bname}'
-    header_line2 = f'{address}'
-    header_line3 = f'Phone: {phone}' + (f' | Ph: {phone2}' if phone2 else '') + (f' | Email: {email}' if email else '')
-    header_line4 = f'GSTIN: {gstin}' + (f' | PAN: {pan}' if pan else '')
-    
-    story.append(Paragraph(header_line1, title_style))
-    story.append(Paragraph(header_line2, small_style))
-    story.append(Paragraph(header_line3, small_style))
-    story.append(Paragraph(header_line4, small_style))
-    story.append(Spacer(1, 2))
-    
-    # ==================== INVOICE DETAILS & COPY BOXES ====================
     addr = order.get('address', {})
     invoice_date = order.get('created_at', '')[:10] if order.get('created_at') else ''
-    
-    # Top section with invoice no/date on left and copy boxes on right
-    left_data = [
-        ['<b>GSTIN:</b>', gstin],
-        ['<b>PAN:</b>', pan],
-        ['<b>Invoice No.</b>', order.get('id', '')],
-        ['<b>Date of Issue</b>', invoice_date],
-        ['<b>State</b>', addr.get('state', '')],
-        ['<b>State Code</b>', addr.get('state_code', '')],
-        ['<b>Mode of Transport</b>', order.get('transport_mode', '') or ''],
-        ['<b>Date of Supply</b>', invoice_date],
-        ['<b>Place of Supply</b>', addr.get('state', '')],
-    ]
-    
-    left_table = Table(left_data, colWidths=[50*mm, 70*mm])
-    left_table.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 6),
-        ('FONT', (0, 0), (0, -1), 'Helvetica-Bold', 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-        ('LEFTPADDING', (0, 0), (-1, -1), 1),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 1),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+
+    # ==================== TOP STRIP: GSTIN/PAN | TAX INVOICE | COPY BOXES ====================
+    gst_pan_block = Table([
+        [Paragraph(f'<b>GSTIN :</b> {gstin}', small_style)],
+        [Paragraph(f'<b>PAN :</b> {pan}', small_style)],
+    ], colWidths=[58*mm])
+    gst_pan_block.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 1.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
     ]))
-    
-    # Copy boxes on right
-    copy_box_style = ParagraphStyle('cbox', parent=styles['Normal'], fontSize=5.5, fontName='Helvetica-Bold', alignment=1)
-    copy_data = [
-        [Paragraph('ORIGINAL<br/>For Receiver', copy_box_style), 
-         Paragraph('DUPLICATE<br/>For Transporter', copy_box_style),
-         Paragraph('TRIPLICATE<br/>For Supplier', copy_box_style)]
+
+    copy_rows = [
+        ['ORIGINAL', 'White', 'For Receiver'],
+        ['DUPLICATE', 'Pink', 'For Transporter'],
+        ['TRIPLICATE', 'Yellow', 'For Supplier'],
     ]
-    copy_table = Table(copy_data, colWidths=[18*mm, 18*mm, 18*mm])
+    copy_table = Table(copy_rows, colWidths=[24*mm, 15*mm, 30*mm])
     copy_table.setStyle(TableStyle([
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('BOX', (0, 0), (-1, -1), 0.75, BLACK),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, BLACK),
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 8),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('HEIGHT', (0, 0), (-1, -1), 18*mm),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
-    
-    # Combine left and right
-    header_combo = [[left_table, copy_table]]
-    header_combo_table = Table(header_combo, colWidths=[120*mm, 54*mm])
-    header_combo_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-    story.append(header_combo_table)
-    story.append(Spacer(1, 2))
-    
-    # ==================== BILL TO SECTION ====================
-    bill_to_data = [
-        ['<b>BILL TO (Receiver)</b>'],
-        [f"Name: {addr.get('name', '')}"],
-        [f"Address: {addr.get('address_line1', '')} {addr.get('address_line2', '')}".strip()],
-        [f"{addr.get('city', '')}, {addr.get('state', '')} - {addr.get('pincode', '')}"],
-        [f"GSTIN: {addr.get('gst_number', '')}" + (f" | State: {addr.get('state', '')} | State Code: {addr.get('state_code', '')}" if addr.get('state') else "")],
-        [f"Mobile: {addr.get('mobile', '')}" + (f" | Email: {addr.get('email', '')}" if addr.get('email') else "")],
-    ]
-    
-    bill_to_table = Table(bill_to_data, colWidths=[176*mm])
-    bill_to_table.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 6),
-        ('FONT', (0, 0), (0, 0), 'Helvetica-Bold', 6.5),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-        ('LEFTPADDING', (0, 0), (-1, -1), 1),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 1),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-    story.append(bill_to_table)
-    story.append(Spacer(1, 2))
-    
-    # ==================== ITEMS TABLE ====================
-    items_data = [['Sl. No.', 'Product Description', 'HSN Code', 'UOM', 'Qty', 'Rate (Rs.)', 'Amount (Rs.)']]
-    
-    total_taxable = 0
-    for i, item in enumerate(order.get('items', []), 1):
-        items_data.append([
-            str(i),
-            item.get('name', ''),
-            item.get('hsn_code', ''),
-            item.get('uom', 'UNIT'),
-            str(item.get('quantity', 0)),
-            f"{item.get('price', 0):.2f}",
-            f"{item.get('total', 0):.2f}"
-        ])
-        total_taxable += item.get('total', 0)
-    
-    # Items table styling
-    items_table = Table(items_data, colWidths=[10*mm, 75*mm, 18*mm, 12*mm, 12*mm, 18*mm, 18*mm])
-    items_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e0e0e0')),
-        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 6),
-        ('FONT', (0, 1), (-1, -1), 'Helvetica', 6),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-        ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+
+    top_strip = Table([[gst_pan_block, Paragraph('TAX INVOICE', tax_invoice_style), copy_table]], colWidths=[58*mm, 65*mm, 69*mm])
+    top_strip.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-        ('LEFTPADDING', (0, 0), (-1, -1), 1),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 1),
+        ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+        ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
+    story.append(top_strip)
+    story.append(Spacer(1, 7))
+
+    # ==================== LOGO / BUSINESS NAME / ADDRESS / DATE ====================
+    logo_img = None
+    logo_data = settings.get('logo')
+    if logo_data:
+        try:
+            b64_data = logo_data.split(',', 1)[1] if ',' in logo_data else logo_data
+            logo_img = Image(io.BytesIO(base64.b64decode(b64_data)), width=22*mm, height=22*mm)
+            logo_img.hAlign = 'LEFT'
+        except Exception:
+            logger.warning('Invoice logo could not be decoded/embedded; continuing without it')
+            logo_img = None
+
+    contact_line = f'Mob.: {phone}' + (f', {phone2}' if phone2 else '') + (f'&nbsp;&nbsp;e-mail : {email}' if email else '')
+    biz_width = 122 if logo_img else 148
+    biz_block = Table([
+        [Paragraph(bname, name_style)],
+        [Paragraph(address, small_style)],
+        [Paragraph(contact_line, small_style)],
+    ], colWidths=[biz_width*mm])
+    biz_block.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+    ]))
+    date_cell = Paragraph(f'Date: {invoice_date}', label_style)
+    if logo_img:
+        biz_row = Table([[logo_img, biz_block, date_cell]], colWidths=[26*mm, biz_width*mm, 44*mm])
+    else:
+        biz_row = Table([[biz_block, date_cell]], colWidths=[biz_width*mm, 44*mm])
+    biz_row.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('ALIGN', (-1, 0), (-1, 0), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    story.append(biz_row)
+    story.append(Spacer(1, 6))
+
+    # ==================== ORDER ID / STATE  |  TRANSPORT / SUPPLY ====================
+    seller_state = 'Uttar Pradesh'
+    seller_state_code = '09'
+    order_id_block = Table([
+        [Paragraph('Order ID', label_style)],
+        [Paragraph(order.get('id', ''), order_id_style)],
+        [Paragraph(f"State : {seller_state}&nbsp;&nbsp;&nbsp;State Code : {seller_state_code}", small_style)],
+    ], colWidths=[94*mm])
+    order_id_block.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('LINEBELOW', (0, 0), (0, 1), 0.4, BLACK),
+    ]))
+
+    mode_supply_block = Table([
+        [Paragraph("Mode of Transportation : Self", small_style)],
+        [Paragraph(f"Date of Supply : {invoice_date}", small_style)],
+        [Paragraph(f"Place of Supply : {addr.get('state', '')}", small_style)],
+    ], colWidths=[96*mm])
+    mode_supply_block.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('LINEBELOW', (0, 0), (0, 1), 0.4, BLACK),
+    ]))
+
+    meta_row = Table([[order_id_block, mode_supply_block]], colWidths=[96*mm, 96*mm])
+    meta_row.setStyle(TableStyle([
+        ('BOX', (0, 0), (-1, -1), 0.9, BLACK),
+        ('LINEAFTER', (0, 0), (0, 0), 0.9, BLACK),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    story.append(meta_row)
+
+    # ==================== DETAILS OF RECEIVER ====================
+    bill_rows = [
+        [Paragraph('Details of Receiver / Billed to :', bill_header_style)],
+        [Paragraph(f"Name : {addr.get('name', '')}", small_style)],
+        [Paragraph(f"Address : {addr.get('address_line1', '')} {addr.get('address_line2', '')}".strip(), small_style)],
+        [Paragraph(f"{addr.get('city', '')}, {addr.get('state', '')} - {addr.get('pincode', '')}" + (f"&nbsp;&nbsp;&nbsp;GSTIN : {addr.get('gst_number')}" if addr.get('gst_number') else ''), small_style)],
+        [Paragraph(f"State : {addr.get('state', '')}&nbsp;&nbsp;&nbsp;State Code : 09&nbsp;&nbsp;&nbsp;Mobile : {addr.get('mobile', '')}", small_style)],
+    ]
+    bill_table = Table(bill_rows, colWidths=[192*mm])
+    bill_table.setStyle(TableStyle([
+        ('BOX', (0, 0), (-1, -1), 0.9, BLACK),
+        ('LINEBELOW', (0, 0), (0, 0), 0.4, BLACK),
+        ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('LINEABOVE', (0, 0), (-1, 0), 0, colors.white),
+    ]))
+    story.append(bill_table)
+
+    # ==================== ITEMS TABLE ====================
+    total_taxable = 0
+    item_rows = []
+    for i, item in enumerate(order.get('items', []), 1):
+        amt = item.get('total', 0)
+        rs, p = rp(amt)
+        item_rows.append([str(i), item.get('name', ''), item.get('hsn_code', ''), item.get('uom', 'UNIT'),
+                           str(item.get('quantity', 0)), f"{item.get('price', 0):.2f}", rs, p])
+        total_taxable += amt
+
+    # Pad with blank ruled rows so the table stretches down the page like the printed bill book
+    # (which always has a fixed number of ruled lines regardless of how many items are written in).
+    MIN_ITEM_ROWS = 9
+    real_row_count = len(item_rows)
+    filler_count = max(0, MIN_ITEM_ROWS - real_row_count)
+    filler_rows = [['', '', '', '', '', '', '', ''] for _ in range(filler_count)]
+
+    items_data = [
+        ['Sl.\nNo.', 'PRODUCT DESCRIPTION', 'HSN\nCode', 'UOM', 'Qty.', 'Rate', 'Amount Taxable Value', ''],
+        ['', '', '', '', '', '', 'Rs.', 'P.'],
+    ] + item_rows + filler_rows
+    col_widths = [8*mm, 94*mm, 16*mm, 12*mm, 10*mm, 19*mm, 21*mm, 12*mm]
+    row_heights = [None, None] + [None] * real_row_count + [10*mm] * filler_count
+    items_table = Table(items_data, colWidths=col_widths, rowHeights=row_heights, repeatRows=2)
+    style_cmds = [
+        ('SPAN', (0, 0), (0, 1)), ('SPAN', (1, 0), (1, 1)), ('SPAN', (2, 0), (2, 1)),
+        ('SPAN', (3, 0), (3, 1)), ('SPAN', (4, 0), (4, 1)), ('SPAN', (5, 0), (5, 1)),
+        ('SPAN', (6, 0), (7, 0)),
+        ('FONT', (0, 0), (-1, 1), 'Helvetica-Bold', 8),
+        ('FONT', (0, 2), (-1, -1), 'Helvetica', 8),
+        ('BOX', (0, 0), (-1, -1), 0.9, BLACK),
+        ('INNERGRID', (0, 0), (-1, 1), 0.5, BLACK),
+        ('LINEBELOW', (0, 1), (-1, -1), 0.4, BLACK),
+        ('LINEAFTER', (0, 2), (-2, -1), 0.4, BLACK),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (2, 0), (4, -1), 'CENTER'),
+        ('ALIGN', (5, 0), (7, -1), 'RIGHT'),
+        ('ALIGN', (1, 0), (1, 1), 'CENTER'),
+        ('ALIGN', (1, 2), (1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+    ]
+    items_table.setStyle(TableStyle(style_cmds))
     story.append(items_table)
-    story.append(Spacer(1, 2))
-    
-    # ==================== TOTALS SECTION ====================
-    subtotal = order.get('subtotal', 0)
+
+    # ==================== TOTALS ====================
     discount = order.get('discount', 0)
     tax = order.get('tax', 0)
     shipping = order.get('shipping', 0)
     grand_total = order.get('total', 0)
     tax_rate = order.get('tax_rate', 0)
-    
-    # Calculate CGST, SGST, IGST
     is_interstate = order.get('is_interstate', False)
-    cgst = 0
-    sgst = 0
-    igst = 0
-    
+    cgst = sgst = igst = 0
     if tax > 0:
         if is_interstate:
             igst = tax
         else:
             cgst = tax / 2
             sgst = tax / 2
-    
-    totals_data = []
-    
-    # Net Taxable Amount
-    totals_data.append(['<b>Taxable Amount</b>', '', f"<b>Rs. {total_taxable:.2f}</b>"])
-    
-    # Discount
+
+    totals_label_style = ParagraphStyle('totlabel', fontSize=8, leading=10, fontName='Helvetica', textColor=BLACK)
+    totals_label_bold_style = ParagraphStyle('totlabelbold', fontSize=8.5, leading=10.5, fontName='Helvetica-Bold', textColor=BLACK)
+
+    def total_label(text, bold=False):
+        return Paragraph(text, totals_label_bold_style if bold else totals_label_style)
+
+    total_rows = [[total_label('NET AMOUNT'), *rp(total_taxable)]]
     if discount > 0:
-        discount_label = f"Discount"
-        if order.get('coupon_code'):
-            discount_label += f" ({order.get('coupon_code')})"
-        totals_data.append([discount_label, '', f"-Rs. {discount:.2f}"])
-    
-    # GST components
+        label = 'Discount' + (f' ({order.get("coupon_code")})' if order.get('coupon_code') else '')
+        d_rs, d_p = rp(discount)
+        total_rows.append([total_label(label), f"-{d_rs}", d_p])
     if cgst > 0:
-        totals_data.append([f'ADD: CGST @ {tax_rate/2}%', '', f'Rs. {cgst:.2f}'])
+        total_rows.append([total_label(f'ADD : CGST @ {tax_rate/2:g}%'), *rp(cgst)])
     if sgst > 0:
-        totals_data.append([f'ADD: SGST @ {tax_rate/2}%', '', f'Rs. {sgst:.2f}'])
+        total_rows.append([total_label(f'ADD : SGST @ {tax_rate/2:g}%'), *rp(sgst)])
     if igst > 0:
-        totals_data.append([f'ADD: IGST @ {tax_rate}%', '', f'Rs. {igst:.2f}'])
-    
-    # Other charges
+        total_rows.append([total_label(f'ADD : IGST @ {tax_rate:g}%'), *rp(igst)])
     if shipping > 0:
-        totals_data.append([f'Other Charges (Shipping)', '', f'Rs. {shipping:.2f}'])
-    
-    # Total
-    totals_data.append([f'<b>TOTAL AMOUNT OF INVOICE</b>', '', f'<b>Rs. {grand_total:.2f}</b>'])
-    
-    totals_table = Table(totals_data, colWidths=[120*mm, 20*mm, 36*mm])
+        total_rows.append([total_label('Other Charges'), *rp(shipping)])
+    total_rows.append([total_label('TOTAL AMOUNT OF INVOICE', bold=True), *rp(grand_total)])
+
+    n = len(total_rows)
+    totals_table = Table(total_rows, colWidths=[46*mm, 22*mm, 10*mm])
     totals_table.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 6),
-        ('FONT', (0, 0), (0, 0), 'Helvetica-Bold', 6),
-        ('FONT', (0, -1), (-1, -1), 'Helvetica-Bold', 6.5),
+        ('FONT', (1, 0), (-1, -1), 'Helvetica', 8),
+        ('FONT', (1, n - 1), (-1, n - 1), 'Helvetica-Bold', 9),
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-        ('ALIGN', (1, 0), (1, -1), 'CENTER'),
-        ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-        ('LEFTPADDING', (0, 0), (-1, -1), 1),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 1),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#e0e0e0')),
+        ('ALIGN', (1, 0), (2, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOX', (0, 0), (-1, -1), 0.9, BLACK),
+        ('INNERGRID', (0, 0), (-1, -1), 0.4, BLACK),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4), ('RIGHTPADDING', (0, 0), (-1, -1), 4),
     ]))
-    story.append(totals_table)
-    story.append(Spacer(1, 2))
-    
-    # ==================== AMOUNT IN WORDS ====================
+
     try:
         from num2words import num2words
-        amount_int = int(grand_total)
-        amount_words = num2words(amount_int, lang='en').title()
-    except:
-        amount_words = f"{grand_total:.2f}"
-    
-    story.append(Paragraph(f'<b>Amount in Words:</b> {amount_words} Rupees Only', normal_style))
-    story.append(Spacer(1, 1))
-    
-    # ==================== PAYMENT STATUS ====================
-    if order.get('payment_method') == 'online':
-        story.append(Paragraph(f'<b>Payment Status:</b> PAID | <b>Payment Method:</b> {order.get("payment_gateway", "Online").upper()}', normal_style))
-        if order.get('transaction_id'):
-            story.append(Paragraph(f'<b>Transaction ID:</b> {order.get("transaction_id")}', normal_style))
-    elif order.get('payment_method') == 'cod':
-        story.append(Paragraph('<b>Payment Status:</b> CASH ON DELIVERY', normal_style))
-    
-    story.append(Spacer(1, 1))
-    
-    # ==================== BANK DETAILS ====================
+        rupees = int(grand_total)
+        paise = round((grand_total - rupees) * 100)
+        amount_words = f"{num2words(rupees, lang='en').title()} Rupees"
+        if paise > 0:
+            amount_words += f" and {num2words(paise, lang='en').title()} Paise"
+    except Exception:
+        amount_words = f"{grand_total:.2f} Rupees"
+
     bank_details = settings.get('bank_details', '')
-    if bank_details:
-        story.append(Paragraph('<b>Bank Details:</b>', normal_style))
-        for line in bank_details.split('\n'):
-            if line.strip():
-                story.append(Paragraph(line.strip(), small_style))
-    
-    story.append(Spacer(1, 2))
-    
-    # ==================== FOOTER: TERMS & CONDITIONS + SIGNATURE ====================
-    footer_left = [
-        ['<b>Terms & Conditions :</b>'],
-        ['1. All disputes subject to Lucknow Jurisdiction only.'],
-        ['2. Goods once sold will not be taken back.'],
-        [''],
-        ['E & O.E.'],
+    bank_lines = [l.strip() for l in bank_details.split('\n') if l.strip()] if bank_details else []
+    if bank_lines:
+        bank_name, *bank_rest = bank_lines
+        indent = '&nbsp;' * 6
+        bank_para = f"<b>{bank_name.upper()}</b>" + ''.join(f"<br/>{indent}{line}" for line in bank_rest)
+    else:
+        bank_para = ''
+
+    if order.get('payment_method') == 'online':
+        payment_line = f"Payment Status : PAID via {order.get('payment_gateway', 'Online').upper()}" + \
+                        (f" (Txn ID: {order.get('transaction_id')})" if order.get('transaction_id') else '')
+    elif order.get('payment_method') == 'cod':
+        payment_line = 'Payment Status : CASH ON DELIVERY'
+    else:
+        payment_line = ''
+
+    left_block_rows = [
+        [Paragraph(f"Total Invoice Value in Words : {amount_words} Only", small_style)],
+        [Paragraph("Certified that the particulars given above are true &amp; correct", small_style)],
     ]
-    
-    footer_right = [
-        ['<b>For KIRAN TRADERS</b>'],
-        [''],
-        [''],
-        ['Authorised Signatory'],
-    ]
-    
-    footer_left_table = Table(footer_left, colWidths=[85*mm])
-    footer_left_table.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 5.5),
-        ('FONT', (0, 0), (0, 0), 'Helvetica-Bold', 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 0.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0.5),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0.5),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0.5),
+    if bank_lines:
+        left_block_rows.append([Paragraph(f"<b>Bankers :</b> {bank_para}", small_style)])
+    if payment_line:
+        left_block_rows.append([Paragraph(f"<b>{payment_line}</b>", small_style)])
+
+    left_block = Table(left_block_rows, colWidths=[114*mm])
+    left_block.setStyle(TableStyle([
+        ('BOX', (0, 0), (-1, -1), 0.9, BLACK),
+        ('LINEBELOW', (0, 0), (0, -2), 0.3, BLACK),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
-    
-    footer_right_table = Table(footer_right, colWidths=[85*mm])
-    footer_right_table.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 5.5),
-        ('FONT', (0, 0), (0, 0), 'Helvetica-Bold', 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 0.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0.5),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0.5),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0.5),
-        ('HEIGHT', (0, 2), (0, 2), 12*mm),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+
+    totals_row = Table([[left_block, totals_table]], colWidths=[114*mm, 78*mm])
+    totals_row.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
-    
-    footer_combo = [[footer_left_table, footer_right_table]]
-    footer_table = Table(footer_combo, colWidths=[85*mm, 85*mm])
+    story.append(totals_row)
+
+    # ==================== FOOTER: TERMS & SIGNATURE (single table so both sides stay level) ====================
+    footer_rows = [
+        [Paragraph('<b>Terms &amp; Conditions :</b>', small_style), Paragraph(f'For <b>{bname}</b>', small_center_style)],
+        [Paragraph('1. All disputes subject to Lucknow Jurisdiction only.', small_style), ''],
+        [Paragraph('2. Goods once sold will not be taken back.', small_style), Paragraph('Rohit Kumar Jaiswal', signature_style)],
+        [Paragraph('E.&amp;O.E.', small_style), Paragraph('Authorised Signatory', small_center_style)],
+    ]
+    footer_table = Table(footer_rows, colWidths=[114*mm, 78*mm])
     footer_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BOX', (0, 0), (-1, -1), 0.9, BLACK),
+        ('LINEAFTER', (0, 0), (0, -1), 0.9, BLACK),
+        ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     story.append(footer_table)
-    
-    # Build PDF
-    doc.build(story)
+
+    def _page_border(canvas, doc_):
+        canvas.saveState()
+        canvas.setLineWidth(1.1)
+        canvas.roundRect(doc_.leftMargin - 5, doc_.bottomMargin - 5, doc_.width + 10, doc_.height + 10, 6, stroke=1, fill=0)
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=_page_border, onLaterPages=_page_border)
     return buf.getvalue()
 
 # ------------------ SEED ------------------
@@ -1955,6 +2331,9 @@ async def on_start():
         await db.orders.create_index('address.mobile')
         await db.categories.create_index('slug')
         await db.users.create_index('email')
+        await db.audit_logs.create_index([('timestamp', -1)])
+        await db.abandoned_carts.create_index('mobile', unique=True)
+        start_abandoned_cart_watcher()
         logger.info('Startup complete')
     except Exception as e:
         logger.error(f'Startup error: {e}')

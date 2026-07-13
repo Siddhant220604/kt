@@ -82,7 +82,7 @@ def send_whatsapp_message(
 
     try:
         resp.raise_for_status()
-    except requests.RequestException as exc:
+    except requests.RequestException:
         logger.exception('WhatsApp API request failed for %s', to_number)
         logger.error('Full error response: %s', resp.text)
         raise

@@ -77,3 +77,34 @@ async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(
     if payload.get('token_version', 0) != user.get('token_version', 0):
         raise HTTPException(status_code=401, detail='Token invalidated')
     return payload
+
+
+async def require_customer(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:
+    """Auth for the customer order-history area (OTP login) - deliberately lighter than
+    require_admin: no DB user/token_version lookup, since there's no customer user record,
+    just a JWT whose `sub` is the verified mobile number."""
+    if creds is None or creds.scheme.lower() != 'bearer':
+        raise HTTPException(status_code=401, detail='Missing or invalid authorization header')
+    try:
+        payload = decode_access_token(creds.credentials)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail='Token expired')
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail='Invalid token')
+    if payload.get('role') != 'customer':
+        raise HTTPException(status_code=403, detail='Customer access required')
+    return payload
+
+
+async def optional_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Optional[Dict]:
+    """Like require_admin, but returns None instead of raising when there's no/invalid token.
+
+    For endpoints that are usable by both an unauthenticated customer (via some other
+    proof of ownership, e.g. a matching mobile number) and an authenticated admin.
+    """
+    if creds is None or creds.scheme.lower() != 'bearer':
+        return None
+    try:
+        return await require_admin(creds)
+    except HTTPException:
+        return None

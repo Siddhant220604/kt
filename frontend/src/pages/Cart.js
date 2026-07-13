@@ -59,11 +59,12 @@ export default function Cart() {
                     <div className="flex items-center border border-border rounded-lg">
                       <button onClick={() => updateQty(it.product_id, it.quantity - 1)} className="px-2.5 py-1.5 hover:bg-muted"><Minus className="h-3.5 w-3.5" /></button>
                       <span className="px-3 text-sm font-medium" data-testid={`cart-qty-${it.product_id}`}>{it.quantity}</span>
-                      <button onClick={() => updateQty(it.product_id, it.quantity + 1)} className="px-2.5 py-1.5 hover:bg-muted"><Plus className="h-3.5 w-3.5" /></button>
+                      <button onClick={() => updateQty(it.product_id, it.quantity + 1)} disabled={it.stock > 0 && it.quantity >= it.stock} className="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="h-3.5 w-3.5" /></button>
                     </div>
                     <div className="font-display font-bold">{formatINR(it.price * it.quantity)}</div>
                     <button onClick={() => { removeItem(it.product_id); toast('Removed'); }} className="ml-auto text-destructive p-1.5 hover:bg-destructive/10 rounded" data-testid={`cart-remove-${it.product_id}`}><Trash2 className="h-4 w-4" /></button>
                   </div>
+                  {it.stock > 0 && it.quantity >= it.stock && <div className="text-xs text-amber-600 mt-1">Only {it.stock} in stock</div>}
                 </div>
               </div>
             ))}

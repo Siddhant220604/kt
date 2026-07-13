@@ -45,7 +45,10 @@ export default function AdminProfile() {
     }
     setSavingPassword(true);
     try {
-      await api.post('/admin/profile/password', { current_password: currentPassword, new_password: newPassword, confirm_password: confirmPassword });
+      const { data } = await api.post('/admin/profile/password', { current_password: currentPassword, new_password: newPassword, confirm_password: confirmPassword });
+      if (data?.token) {
+        localStorage.setItem('kt_admin_token', data.token);
+      }
       toast.success('Password changed');
       setCurrentPassword('');
       setNewPassword('');

@@ -31,6 +31,15 @@ export default function AdminOrderDetail() {
     finally { setSaving(false); }
   };
 
+  const markRefunded = async () => {
+    if (!window.confirm('Confirm the refund has actually been processed (bank transfer/UPI)?')) return;
+    try {
+      await api.post(`/orders/${oid}/mark-refunded`);
+      toast.success('Marked as refunded');
+      await load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to update'); }
+  };
+
   if (!order) return <div>Loading...</div>;
 
   return (
@@ -47,6 +56,17 @@ export default function AdminOrderDetail() {
           <a href={`https://wa.me/${order.address?.mobile}`} target="_blank" rel="noreferrer"><Button variant="outline" className="gap-2"><MessageCircle className="h-4 w-4" />Customer</Button></a>
         </div>
       </div>
+      {order.refund_status === 'pending' && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+          <div className="text-sm text-red-700 dark:text-red-300"><b>Refund pending:</b> this order was paid and then cancelled. Process the refund (bank transfer/UPI) and mark it done here.</div>
+          <Button size="sm" onClick={markRefunded} data-testid="admin-mark-refunded">Mark as Refunded</Button>
+        </div>
+      )}
+      {order.refund_status === 'refunded' && (
+        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-3 text-sm text-emerald-700 dark:text-emerald-300">
+          Refunded on {order.refunded_at?.slice(0, 10)}
+        </div>
+      )}
       <div className="grid lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">
           <div className="bg-card border border-border rounded-2xl p-4">
