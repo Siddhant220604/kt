@@ -96,7 +96,7 @@ const Header = () => {
             <Button variant="ghost" size="icon" onClick={toggle} data-testid="theme-toggle" aria-label="Toggle theme">
               {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
-            <Link to="/my-orders" data-testid="my-orders-link">
+            <Link to="/account" data-testid="account-link">
               <Button variant="ghost" size="icon"><User className="h-5 w-5" /></Button>
             </Link>
             <Link to="/wishlist" data-testid="wishlist-link">

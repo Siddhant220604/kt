@@ -9,6 +9,7 @@ import { SettingsProvider } from './lib/settings';
 import PublicLayout from './components/PublicLayout';
 import AdminLayout from './components/AdminLayout';
 import ProtectedRoute from './components/ProtectedRoute';
+import CustomerProtectedRoute from './components/CustomerProtectedRoute';
 import './App.css';
 
 // Public
@@ -22,7 +23,9 @@ const OrderSuccess = lazy(() => import('./pages/OrderSuccess'));
 const OrderTracking = lazy(() => import('./pages/OrderTracking'));
 const Contact = lazy(() => import('./pages/Contact'));
 const Wishlist = lazy(() => import('./pages/Wishlist'));
-const MyOrders = lazy(() => import('./pages/MyOrders'));
+const SignIn = lazy(() => import('./pages/SignIn'));
+const SignUp = lazy(() => import('./pages/SignUp'));
+const Account = lazy(() => import('./pages/Account'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 // Admin
@@ -64,13 +67,17 @@ function App() {
                       <Route path="/products" element={<Products />} />
                       <Route path="/products/:idOrSlug" element={<ProductDetail />} />
                       <Route path="/cart" element={<Cart />} />
-                      <Route path="/checkout" element={<Checkout />} />
                       <Route path="/order-success/:orderId" element={<OrderSuccess />} />
                       <Route path="/track" element={<OrderTracking />} />
                       <Route path="/track/:orderId" element={<OrderTracking />} />
                       <Route path="/contact" element={<Contact />} />
                       <Route path="/wishlist" element={<Wishlist />} />
-                      <Route path="/my-orders" element={<MyOrders />} />
+                      <Route path="/signin" element={<SignIn />} />
+                      <Route path="/signup" element={<SignUp />} />
+                      <Route element={<CustomerProtectedRoute />}>
+                        <Route path="/checkout" element={<Checkout />} />
+                        <Route path="/account" element={<Account />} />
+                      </Route>
                     </Route>
                     <Route path="/admin/login" element={<AdminLogin />} />
                     <Route element={<ProtectedRoute />}>

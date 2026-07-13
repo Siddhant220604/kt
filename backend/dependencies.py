@@ -80,9 +80,8 @@ async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(
 
 
 async def require_customer(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:
-    """Auth for the customer order-history area (OTP login) - deliberately lighter than
-    require_admin: no DB user/token_version lookup, since there's no customer user record,
-    just a JWT whose `sub` is the verified mobile number."""
+    """Auth for customer accounts (email/password signup+login). Mirrors require_admin's
+    token_version check so changing password invalidates any other still-logged-in session."""
     if creds is None or creds.scheme.lower() != 'bearer':
         raise HTTPException(status_code=401, detail='Missing or invalid authorization header')
     try:
@@ -93,6 +92,13 @@ async def require_customer(creds: Optional[HTTPAuthorizationCredentials] = Depen
         raise HTTPException(status_code=401, detail='Invalid token')
     if payload.get('role') != 'customer':
         raise HTTPException(status_code=403, detail='Customer access required')
+
+    from server import db as server_db
+    customer = await server_db.customers.find_one({'id': payload.get('sub')})
+    if not customer:
+        raise HTTPException(status_code=401, detail='Invalid token')
+    if payload.get('token_version', 0) != customer.get('token_version', 0):
+        raise HTTPException(status_code=401, detail='Token invalidated')
     return payload
 
 

@@ -15,7 +15,6 @@ import asyncio
 import csv
 import hashlib
 import hmac
-import secrets
 import io
 import re
 import base64
@@ -263,12 +262,31 @@ class TrackOrderRequest(BaseModel):
     order_id: str = Field(min_length=1, max_length=50)
     mobile: str = Field(min_length=1, max_length=20)
 
-class CustomerOtpRequestIn(BaseModel):
+class CustomerSignupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=100)
     mobile: str = Field(min_length=10, max_length=15)
 
-class CustomerOtpVerifyIn(BaseModel):
-    mobile: str = Field(min_length=10, max_length=15)
-    otp: str = Field(min_length=4, max_length=8)
+class CustomerLoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=100)
+
+class CustomerProfileUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    email: Optional[EmailStr] = None
+    mobile: Optional[str] = Field(None, min_length=10, max_length=15)
+    address_line1: Optional[str] = Field(None, max_length=300)
+    address_line2: Optional[str] = Field(None, max_length=300)
+    city: Optional[str] = Field(None, max_length=100)
+    state: Optional[str] = Field(None, max_length=100)
+    pincode: Optional[str] = Field(None, max_length=10)
+    landmark: Optional[str] = Field(None, max_length=200)
+    gst_number: Optional[str] = Field(None, max_length=20)
+
+class CustomerPasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6, max_length=100)
 
 class WhatsAppMessageIn(BaseModel):
     message: str
@@ -909,7 +927,7 @@ def effective_unit_price(product: Dict[str, Any], quantity: int) -> float:
 
 
 @api_router.post('/orders')
-async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
+async def create_order(order: OrderIn, background_tasks: BackgroundTasks, payload: Dict = Depends(dependencies.require_customer)):
     if not order.items:
         raise HTTPException(status_code=400, detail='No items')
     _check_duplicate_order(order)
@@ -963,6 +981,7 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks):
     doc = {
         'id': oid,
         'order_number': oid,
+        'customer_id': payload['sub'],
         'items': validated_items,
         'address': order.address.model_dump(),
         'payment_method': order.payment_method,
@@ -1035,67 +1054,108 @@ async def track_order(req: TrackOrderRequest):
         raise HTTPException(status_code=403, detail='Mobile number does not match')
     return o
 
-# ------------------ CUSTOMER OTP LOGIN ------------------
+# ------------------ CUSTOMER ACCOUNTS ------------------
 
-CUSTOMER_OTP_EXPIRE_SECONDS = 5 * 60
 CUSTOMER_TOKEN_EXPIRE_DAYS = 30
 
 
-@api_router.post('/customer/auth/request-otp')
-async def request_customer_otp(req: CustomerOtpRequestIn, request: Request):
-    dependencies.check_rate_limit(request, 'customer_otp_request', max_requests=5, window_seconds=15 * 60)
-    mobile = ''.join(ch for ch in req.mobile if ch.isdigit())
-    # Only customers who've actually ordered before can log in - this feature is "see my past
-    # orders", not new-account signup. Respond identically either way so a caller can't use this
-    # endpoint to enumerate which mobile numbers have placed orders.
-    has_order = await db.orders.find_one({'address.mobile': mobile}, {'_id': 0, 'id': 1})
-    if has_order:
-        otp = f'{secrets.randbelow(1_000_000):06d}'
-        await db.customer_otps.update_one(
-            {'mobile': mobile},
-            {'$set': {
-                'otp': otp,
-                'expires_at': (datetime.now(timezone.utc) + timedelta(seconds=CUSTOMER_OTP_EXPIRE_SECONDS)).isoformat(),
-                'attempts': 0,
-            }},
-            upsert=True,
-        )
-        phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
-        config = get_whatsapp_config()
-        if phone and config.is_valid:
-            try:
-                send_text_message(config, phone, f'Your Kiran Traders login code is {otp}. It expires in 5 minutes.')
-            except Exception:
-                logger.exception('Failed to send customer login OTP to %s', mobile)
-    return {'ok': True}
+async def _link_past_orders_to_customer(customer_id: str, email: str, mobile: str) -> None:
+    """Best-effort backfill: orders placed as a guest (or before this account system existed)
+    that match this customer's email/mobile get retroactively attached, so signing up doesn't
+    orphan someone's order history. Safe to call repeatedly - only touches unlinked orders."""
+    await db.orders.update_many(
+        {'customer_id': {'$exists': False}, '$or': [{'address.mobile': mobile}, {'address.email': email}]},
+        {'$set': {'customer_id': customer_id}},
+    )
 
 
-@api_router.post('/customer/auth/verify-otp')
-async def verify_customer_otp(req: CustomerOtpVerifyIn, request: Request):
-    dependencies.check_rate_limit(request, 'customer_otp_verify', max_requests=15, window_seconds=15 * 60)
+@api_router.post('/customer/auth/signup')
+async def customer_signup(req: CustomerSignupIn, request: Request):
+    dependencies.check_rate_limit(request, 'customer_signup', max_requests=10, window_seconds=15 * 60)
+    email = req.email.lower()
+    if await db.customers.find_one({'email': email}):
+        raise HTTPException(status_code=400, detail='An account with this email already exists')
     mobile = ''.join(ch for ch in req.mobile if ch.isdigit())
-    rec = await db.customer_otps.find_one({'mobile': mobile})
-    if not rec:
-        raise HTTPException(status_code=400, detail='Invalid or expired code. Please request a new one.')
-    if rec.get('attempts', 0) >= 5:
-        await db.customer_otps.delete_one({'mobile': mobile})
-        raise HTTPException(status_code=429, detail='Too many incorrect attempts. Please request a new code.')
-    expires_at = rec.get('expires_at')
-    if not expires_at or datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
-        await db.customer_otps.delete_one({'mobile': mobile})
-        raise HTTPException(status_code=400, detail='Code expired. Please request a new one.')
-    if rec.get('otp') != req.otp.strip():
-        await db.customer_otps.update_one({'mobile': mobile}, {'$inc': {'attempts': 1}})
-        raise HTTPException(status_code=400, detail='Incorrect code')
-    await db.customer_otps.delete_one({'mobile': mobile})
-    token = create_token(mobile, mobile, 'customer', 0, expires_delta=timedelta(days=CUSTOMER_TOKEN_EXPIRE_DAYS))
-    return {'token': token, 'mobile': mobile}
+    cid = str(uuid.uuid4())
+    doc = {
+        'id': cid,
+        'name': req.name.strip(),
+        'email': email,
+        'password_hash': auth.hash_password(req.password),
+        'mobile': mobile,
+        'token_version': 0,
+        'created_at': now_iso(),
+    }
+    await db.customers.insert_one(doc)
+    await _link_past_orders_to_customer(cid, email, mobile)
+    token = create_token(cid, email, 'customer', 0, expires_delta=timedelta(days=CUSTOMER_TOKEN_EXPIRE_DAYS))
+    return {'token': token, 'name': doc['name'], 'email': email}
+
+
+@api_router.post('/customer/auth/login')
+async def customer_login(req: CustomerLoginIn, request: Request):
+    dependencies.check_login_rate_limit(request)
+    email = req.email.lower()
+    c = await db.customers.find_one({'email': email})
+    if not c or not auth.verify_password(req.password, c.get('password_hash', '')):
+        dependencies.record_failed_login(request)
+        raise HTTPException(status_code=401, detail='Invalid email or password')
+    dependencies.clear_failed_logins(request)
+    await _link_past_orders_to_customer(c['id'], email, c.get('mobile', ''))
+    token = create_token(c['id'], email, 'customer', c.get('token_version', 0), expires_delta=timedelta(days=CUSTOMER_TOKEN_EXPIRE_DAYS))
+    return {'token': token, 'name': c.get('name', ''), 'email': email}
+
+
+@api_router.get('/customer/auth/me')
+async def customer_me(payload: Dict = Depends(dependencies.require_customer)):
+    c = await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0})
+    if not c:
+        raise HTTPException(status_code=404, detail='Account not found')
+    return c
+
+
+@api_router.get('/customer/profile')
+async def get_customer_profile(payload: Dict = Depends(dependencies.require_customer)):
+    c = await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0})
+    if not c:
+        raise HTTPException(status_code=404, detail='Account not found')
+    return c
+
+
+@api_router.put('/customer/profile')
+async def update_customer_profile(req: CustomerProfileUpdate, payload: Dict = Depends(dependencies.require_customer)):
+    doc = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not doc:
+        raise HTTPException(status_code=400, detail='Nothing to update')
+    if 'email' in doc:
+        doc['email'] = doc['email'].lower()
+        existing = await db.customers.find_one({'email': doc['email']})
+        if existing and existing['id'] != payload['sub']:
+            raise HTTPException(status_code=400, detail='Another account already uses this email')
+    if 'mobile' in doc:
+        doc['mobile'] = ''.join(ch for ch in doc['mobile'] if ch.isdigit())
+    doc['updated_at'] = now_iso()
+    await db.customers.update_one({'id': payload['sub']}, {'$set': doc})
+    return await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0})
+
+
+@api_router.post('/customer/profile/password')
+async def change_customer_password(req: CustomerPasswordChange, payload: Dict = Depends(dependencies.require_customer)):
+    c = await db.customers.find_one({'id': payload['sub']})
+    if not c or not auth.verify_password(req.current_password, c.get('password_hash', '')):
+        raise HTTPException(status_code=401, detail='Current password is incorrect')
+    new_version = c.get('token_version', 0) + 1
+    await db.customers.update_one({'id': payload['sub']}, {'$set': {
+        'password_hash': auth.hash_password(req.new_password),
+        'token_version': new_version,
+    }})
+    token = create_token(c['id'], c['email'], 'customer', new_version, expires_delta=timedelta(days=CUSTOMER_TOKEN_EXPIRE_DAYS))
+    return {'ok': True, 'token': token}
 
 
 @api_router.get('/customer/orders')
 async def customer_orders(payload: Dict = Depends(dependencies.require_customer)):
-    mobile = payload.get('sub')
-    orders = await db.orders.find({'address.mobile': mobile}, {'_id': 0}).sort('created_at', -1).to_list(200)
+    orders = await db.orders.find({'customer_id': payload['sub']}, {'_id': 0}).sort('created_at', -1).to_list(200)
     return orders
 
 
@@ -2333,6 +2393,8 @@ async def on_start():
         await db.users.create_index('email')
         await db.audit_logs.create_index([('timestamp', -1)])
         await db.abandoned_carts.create_index('mobile', unique=True)
+        await db.customers.create_index('email', unique=True)
+        await db.orders.create_index('customer_id')
         start_abandoned_cart_watcher()
         logger.info('Startup complete')
     except Exception as e:

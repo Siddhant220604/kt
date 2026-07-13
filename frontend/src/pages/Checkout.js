@@ -70,6 +70,28 @@ export default function Checkout() {
     fetchCoupons();
   }, []);
 
+  // Pre-fill delivery details from the signed-in customer's saved profile (checkout is now
+  // only reachable while logged in, via CustomerProtectedRoute) - fields stay fully editable
+  // since a delivery address can differ from the account's saved one.
+  useEffect(() => {
+    api.get('/customer/profile').then(({ data }) => {
+      setForm(f => ({
+        ...f,
+        name: f.name || data.name || '',
+        mobile: f.mobile || data.mobile || '',
+        email: f.email || data.email || '',
+        address_line1: f.address_line1 || data.address_line1 || '',
+        address_line2: f.address_line2 || data.address_line2 || '',
+        city: data.city ? data.city : f.city,
+        state: data.state ? data.state : f.state,
+        pincode: f.pincode || data.pincode || '',
+        landmark: f.landmark || data.landmark || '',
+        gst_number: f.gst_number || data.gst_number || '',
+      }));
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Opportunistically snapshot the cart once we have a valid mobile number, so an abandoned
   // checkout can still get a WhatsApp reminder later. Debounced and best-effort - failures here
   // must never block or interrupt checkout.
@@ -177,7 +199,12 @@ export default function Checkout() {
       toast.success('Order placed successfully!');
       nav(`/order-success/${data.id}`, { state: { mobile: form.mobile, order: data } });
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to place order');
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        toast.error('Your session expired. Please sign in again.');
+        nav('/signup', { state: { from: loc } });
+      } else {
+        toast.error(err.response?.data?.detail || 'Failed to place order');
+      }
     } finally {
       if (payment !== 'online') setPlacing(false);
     }
@@ -195,7 +222,12 @@ export default function Checkout() {
     <Section>
       <Container>
         <Link to="/cart" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4"><ChevronLeft className="h-4 w-4" /> Back to cart</Link>
-        <h1 className="text-3xl md:text-4xl font-display font-bold mb-6">Checkout</h1>
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-6">
+          <h1 className="text-3xl md:text-4xl font-display font-bold">Checkout</h1>
+          <div className="text-xs text-muted-foreground">
+            Signed in as <b>{localStorage.getItem('kt_customer_email')}</b> · <Link to="/account" className="text-primary hover:underline">My Account</Link>
+          </div>
+        </div>
         <form onSubmit={submit} className="grid lg:grid-cols-[1fr,380px] gap-6">
           <div className="space-y-6">
             {/* Address */}
