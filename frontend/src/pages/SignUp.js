@@ -42,16 +42,16 @@ export default function SignUp() {
   return (
     <Section>
       <Container className="max-w-md">
-        <form onSubmit={submit} className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+        <form onSubmit={submit} className="bg-card border border-border rounded-2xl p-6 shadow-sm" autoComplete="off">
           <div className="h-12 w-12 rounded-full bg-primary/10 grid place-items-center mx-auto"><UserPlus className="h-6 w-6 text-primary" /></div>
           <h1 className="text-xl font-display font-bold text-center mt-3">Create your account</h1>
           <p className="text-sm text-muted-foreground text-center mt-1">Sign up to place an order and track your purchase history.</p>
           <div className="mt-5 space-y-3">
-            <div><Label className="text-xs text-muted-foreground">Full Name</Label><Input required value={form.name} onChange={(e) => upd('name', e.target.value)} data-testid="signup-name-input" /></div>
-            <div><Label className="text-xs text-muted-foreground">Email</Label><Input required type="email" value={form.email} onChange={(e) => upd('email', e.target.value)} data-testid="signup-email-input" /></div>
-            <div><Label className="text-xs text-muted-foreground">Mobile Number</Label><Input required inputMode="numeric" maxLength={10} value={form.mobile} onChange={(e) => upd('mobile', e.target.value.replace(/[^0-9]/g, ''))} data-testid="signup-mobile-input" /></div>
-            <div><Label className="text-xs text-muted-foreground">Password</Label><Input required type="password" value={form.password} onChange={(e) => upd('password', e.target.value)} data-testid="signup-password-input" /></div>
-            <div><Label className="text-xs text-muted-foreground">Confirm Password</Label><Input required type="password" value={form.confirm} onChange={(e) => upd('confirm', e.target.value)} data-testid="signup-confirm-input" /></div>
+            <div><Label className="text-xs text-muted-foreground">Full Name</Label><Input required autoComplete="name" value={form.name} onChange={(e) => upd('name', e.target.value)} data-testid="signup-name-input" /></div>
+            <div><Label className="text-xs text-muted-foreground">Email</Label><Input required type="email" autoComplete="off" value={form.email} onChange={(e) => upd('email', e.target.value)} data-testid="signup-email-input" /></div>
+            <div><Label className="text-xs text-muted-foreground">Mobile Number</Label><Input required inputMode="numeric" maxLength={10} autoComplete="off" value={form.mobile} onChange={(e) => upd('mobile', e.target.value.replace(/[^0-9]/g, ''))} data-testid="signup-mobile-input" /></div>
+            <div><Label className="text-xs text-muted-foreground">Password</Label><Input required type="password" autoComplete="new-password" value={form.password} onChange={(e) => upd('password', e.target.value)} data-testid="signup-password-input" /></div>
+            <div><Label className="text-xs text-muted-foreground">Confirm Password</Label><Input required type="password" autoComplete="new-password" value={form.confirm} onChange={(e) => upd('confirm', e.target.value)} data-testid="signup-confirm-input" /></div>
             <Button type="submit" className="w-full" disabled={loading} data-testid="signup-submit">{loading ? 'Creating account...' : 'Create Account'}</Button>
           </div>
           <p className="text-sm text-center text-muted-foreground mt-4">

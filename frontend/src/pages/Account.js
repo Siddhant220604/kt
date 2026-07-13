@@ -103,12 +103,12 @@ export default function Account() {
               <div className="flex justify-end"><Button type="submit" disabled={savingProfile} data-testid="account-save-profile">{savingProfile ? 'Saving...' : 'Save Profile'}</Button></div>
             </form>
 
-            <form onSubmit={changePassword} className="bg-card border border-border rounded-2xl p-5 space-y-4">
+            <form onSubmit={changePassword} className="bg-card border border-border rounded-2xl p-5 space-y-4" autoComplete="off">
               <div className="flex items-center gap-2 text-sm font-semibold"><LockKeyhole className="h-4 w-4" />Change Password</div>
               <div className="grid gap-3 sm:grid-cols-3">
-                <div><Label className="text-xs text-muted-foreground">Current Password</Label><Input required type="password" value={pw.current_password} onChange={(e) => setPw(p => ({ ...p, current_password: e.target.value }))} /></div>
-                <div><Label className="text-xs text-muted-foreground">New Password</Label><Input required type="password" value={pw.new_password} onChange={(e) => setPw(p => ({ ...p, new_password: e.target.value }))} /></div>
-                <div><Label className="text-xs text-muted-foreground">Confirm New Password</Label><Input required type="password" value={pw.confirm} onChange={(e) => setPw(p => ({ ...p, confirm: e.target.value }))} /></div>
+                <div><Label className="text-xs text-muted-foreground">Current Password</Label><Input required type="password" autoComplete="off" value={pw.current_password} onChange={(e) => setPw(p => ({ ...p, current_password: e.target.value }))} /></div>
+                <div><Label className="text-xs text-muted-foreground">New Password</Label><Input required type="password" autoComplete="new-password" value={pw.new_password} onChange={(e) => setPw(p => ({ ...p, new_password: e.target.value }))} /></div>
+                <div><Label className="text-xs text-muted-foreground">Confirm New Password</Label><Input required type="password" autoComplete="new-password" value={pw.confirm} onChange={(e) => setPw(p => ({ ...p, confirm: e.target.value }))} /></div>
               </div>
               <div className="flex justify-end"><Button type="submit" disabled={savingPw} data-testid="account-save-password">{savingPw ? 'Updating...' : 'Update Password'}</Button></div>
             </form>
