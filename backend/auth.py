@@ -40,6 +40,10 @@ def verify_password(password: str, hashed_password: str) -> bool:
     try:
         return pwd_context.verify(password, hashed_password)
     except Exception:
+        # Never log the password or hash themselves - just note that a stored hash didn't
+        # verify cleanly (e.g. corrupted/unexpected format), so it's visible for debugging
+        # without putting credential material in the logs.
+        logger.exception('Password verification raised an unexpected error (treating as mismatch)')
         return False
 
 

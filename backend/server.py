@@ -1,10 +1,10 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo import ReturnDocument
+from pymongo import ReturnDocument, MongoClient
 import os
 import logging
 from pathlib import Path
@@ -22,6 +22,7 @@ import base64
 import time
 import qrcode
 import requests
+from PIL import Image as PILImage
 
 import auth
 import audit
@@ -42,6 +43,43 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'kiran_traders')]
+
+# Separate *synchronous* client, used only to record outgoing WhatsApp message IDs for
+# delivery-status correlation (see record_whatsapp_message_sent below). The functions that
+# send WhatsApp notifications run via BackgroundTasks in a worker thread, not on the asyncio
+# event loop, so they can't `await` the motor client above without a bigger refactor - a tiny
+# dedicated sync client sidesteps that instead of restructuring every call site to async.
+_sync_mongo_client = MongoClient(mongo_url, serverSelectionTimeoutMS=3000)
+_sync_db = _sync_mongo_client[os.environ.get('DB_NAME', 'kiran_traders')]
+
+
+def record_whatsapp_message_sent(result: Optional[Dict[str, Any]], **context: Any) -> None:
+    """Persists every WhatsApp message ID (wamid) this app generates, right after Meta accepts
+    a send, so the webhook handler below can later correlate an incoming delivery-status event
+    (sent/delivered/read/failed) back to what was actually sent and to which order/template."""
+    if not isinstance(result, dict):
+        return
+    try:
+        recipient = ((result.get('contacts') or [{}])[0]).get('wa_id', '')
+        for msg in result.get('messages', []):
+            wamid = msg.get('id')
+            if not wamid:
+                continue
+            _sync_db.whatsapp_message_events.update_one(
+                {'wamid': wamid},
+                {
+                    '$set': {
+                        'wamid': wamid,
+                        'recipient': recipient,
+                        'accepted_status': msg.get('message_status', 'accepted'),
+                        **context,
+                    },
+                    '$setOnInsert': {'created_at': now_iso(), 'status_history': []},
+                },
+                upsert=True,
+            )
+    except Exception:
+        logger.exception('Failed to record WhatsApp message id for delivery-status correlation')
 
 DEFAULT_BUSINESS_EMAIL = 'kirantraders1996@gmail.com'
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://kirantraders.vercel.app').rstrip('/')
@@ -67,6 +105,17 @@ api_router = APIRouter(prefix="/api")
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all safety net for anything that isn't an intentionally-raised HTTPException
+    (FastAPI's own HTTPException handler still takes precedence for those, since it's
+    registered on the more specific type) - e.g. an uncaught pymongo error, a bug in a route
+    with no try/except. Full exception + traceback goes to the server log; the client only
+    ever sees a generic message, never the exception text, a stack trace, or a file path."""
+    logger.exception('Unhandled exception on %s %s', request.method, request.url.path)
+    return JSONResponse(status_code=500, content={'detail': 'Something went wrong on our end. Please try again shortly.'})
 
 # ------------------ HELPERS ------------------
 
@@ -200,6 +249,70 @@ def _empty_string_to_none(value: Any) -> Any:
     return None if value == '' else value
 
 
+# All "image upload" fields in this app (product/category/banner images, settings logo/UPI QR)
+# arrive as either a plain http(s) URL or a base64 data: URI - there is no multipart file upload
+# endpoint anywhere in this app, so uploaded bytes are never written to disk/served as static
+# files; they live only as a string inside a MongoDB document and are only ever rendered back
+# via <img src="...">, which cannot execute their content as code. The one real gap that pattern
+# leaves open is SVG: an `image/svg+xml` data URI can contain a <script> tag that some browsers
+# will execute when it's loaded as an <img>. MAX_IMAGE_BYTES/ALLOWED_IMAGE_MIME_TYPES below close
+# that by allow-listing only genuine raster formats and verifying the *decoded bytes* actually
+# are that format via Pillow - not trusting the data URI's declared MIME type or a filename
+# extension, since either can lie about what the bytes actually contain.
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
+ALLOWED_IMAGE_MIME_TYPES = {'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/webp': 'WEBP'}
+
+
+def validate_image_field(value: Optional[str], field_label: str) -> Optional[str]:
+    """Validates an image field's value in place and returns it unchanged if valid.
+
+    - None/'' (field not provided) passes through untouched.
+    - A plain http(s):// URL passes through untouched (nothing to decode - the image itself
+      lives on whatever host serves that URL, out of this app's control either way).
+    - A data: URI must declare an allow-listed image MIME type, decode as valid base64, be
+      under MAX_IMAGE_BYTES once decoded, and Pillow must be able to open the decoded bytes and
+      confirm they're a genuine image whose actual format matches what was declared.
+    Anything else raises ValueError, which FastAPI turns into a 422 - the upload is rejected
+    outright rather than stored and dealt with later.
+    """
+    if not value:
+        return value
+    if value.startswith('http://') or value.startswith('https://'):
+        return value
+    if not value.startswith('data:'):
+        raise ValueError(f'{field_label} must be an image URL or a base64 data URI')
+
+    try:
+        header, b64_data = value.split(',', 1)
+    except ValueError:
+        raise ValueError(f'{field_label} is not a valid data URI')
+
+    declared_mime = header[len('data:'):].split(';')[0].strip().lower()
+    if declared_mime not in ALLOWED_IMAGE_MIME_TYPES:
+        raise ValueError(f'{field_label} must be a PNG, JPEG, or WEBP image (got "{declared_mime or "unknown"}")')
+
+    try:
+        raw = base64.b64decode(b64_data, validate=True)
+    except Exception:
+        raise ValueError(f'{field_label} is not valid base64-encoded data')
+
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ValueError(f'{field_label} must be under 2MB')
+
+    try:
+        with PILImage.open(io.BytesIO(raw)) as probe:
+            actual_format = (probe.format or '').upper()
+        with PILImage.open(io.BytesIO(raw)) as probe2:
+            probe2.verify()
+    except Exception:
+        raise ValueError(f'{field_label} content is not a valid image file')
+
+    if actual_format != ALLOWED_IMAGE_MIME_TYPES[declared_mime]:
+        raise ValueError(f'{field_label} content does not match its declared type ({declared_mime})')
+
+    return value
+
+
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     email: EmailStr
@@ -223,6 +336,11 @@ class CategoryIn(BaseModel):
     icon: Optional[str] = Field('Package', max_length=100)
     image: Optional[str] = Field('', max_length=2_800_000)
     order: int = Field(0, ge=0, le=100000)
+
+    @field_validator('image')
+    @classmethod
+    def validate_image(cls, v: Optional[str]) -> Optional[str]:
+        return validate_image_field(v, 'Category image')
 
 class PriceTier(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -262,14 +380,8 @@ class ProductIn(BaseModel):
     def validate_images(cls, images: List[str]) -> List[str]:
         if len(images) > 10:
             raise ValueError('A product can have at most 10 images')
-        # Base64 data-URI uploads only - a ~2MB decoded image is roughly this many
-        # base64 characters. Plain image URLs (http/https) are always far shorter and
-        # pass through untouched; the frontend already caps uploads at 1MB client-side,
-        # this is the server-side backstop for direct API callers.
-        max_data_uri_chars = 2_800_000
         for img in images:
-            if img.startswith('data:') and len(img) > max_data_uri_chars:
-                raise ValueError('Each product image must be under ~2MB')
+            validate_image_field(img, 'Product image')
         return images
 
     @field_validator('tags')
@@ -426,6 +538,11 @@ class BannerIn(BaseModel):
     active: bool = True
     order: int = Field(0, ge=0, le=100000)
 
+    @field_validator('image')
+    @classmethod
+    def validate_image(cls, v: str) -> str:
+        return validate_image_field(v, 'Banner image')
+
 class ReviewIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
     product_id: str = Field(min_length=1, max_length=100)
@@ -477,6 +594,16 @@ class SettingsIn(BaseModel):
     @classmethod
     def validate_gstin(cls, v: Optional[str]) -> Optional[str]:
         return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GSTIN')
+
+    @field_validator('logo')
+    @classmethod
+    def validate_logo(cls, v: Optional[str]) -> Optional[str]:
+        return validate_image_field(v, 'Logo')
+
+    @field_validator('upi_qr')
+    @classmethod
+    def validate_upi_qr(cls, v: Optional[str]) -> Optional[str]:
+        return validate_image_field(v, 'UPI QR code')
 
 # ------------------ AUTH ROUTES ------------------
 
@@ -849,7 +976,7 @@ async def create_razorpay_order(req: PaymentCreateOrderRequest):
         response.raise_for_status()
         data = response.json()
     except Exception as exc:
-        logger.error('Failed to create Razorpay order: %s', exc)
+        logger.exception('Failed to create Razorpay order')
         raise HTTPException(status_code=502, detail='Unable to create Razorpay order right now.') from exc
 
     # Persist which Razorpay order this local order was billed against, so /payment/verify
@@ -1670,14 +1797,15 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
     try:
         # Order placement/receipt notification -> the order_confirmation approved template.
         # Body variables: {{1}} customer name, {{2}} order id, {{3}} total amount.
-        send_template_message(
+        result = send_template_message(
             phone,
             WHATSAPP_TEMPLATE_ORDER_CONFIRMATION,
             body_parameters=[customer_name, order_id, total_amount],
             config=config,
         )
-    except Exception as exc:
-        logger.error('Failed to send WhatsApp order notification for order %s: %s', order_id, exc)
+        record_whatsapp_message_sent(result, template=WHATSAPP_TEMPLATE_ORDER_CONFIRMATION, order_id=order_id)
+    except Exception:
+        logger.exception('Failed to send WhatsApp order notification for order %s', order_id)
 
 
 # Feature 1: per-status WhatsApp text fallback for statuses with no approved template
@@ -1741,8 +1869,10 @@ def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settin
             result = send_text_message(config, phone, msg_body)
         message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
         logger.info('WhatsApp status update (%s) sent for order %s, message_id=%s', status, order_id, message_id)
-    except Exception as exc:
-        logger.error('Failed to send status update WhatsApp notification for order %s: %s', order_id, exc)
+        if template_name:
+            record_whatsapp_message_sent(result, template=template_name, order_id=order_id, status=status)
+    except Exception:
+        logger.exception('Failed to send status update WhatsApp notification for order %s', order_id)
 
 
 def send_order_notification(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
@@ -1851,6 +1981,7 @@ async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str,
         )
         message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
         await db.orders.update_one({'id': order_id}, {'$set': {'invoice_sent': True, 'invoice_sent_at': now_iso()}})
+        await asyncio.to_thread(record_whatsapp_message_sent, result, template=WHATSAPP_TEMPLATE_INVOICE_READY, order_id=order_id)
         logger.info('Invoice WhatsApp sent for order %s, message_id=%s', order_id, message_id)
     except Exception:
         logger.exception('Unexpected error sending invoice WhatsApp for order %s', order_id)
@@ -1924,9 +2055,10 @@ async def _send_review_request_after_delay(order_id: str) -> None:
                 config,
             )
             message_id = (result.get('messages') or [{}])[0].get('id') if isinstance(result, dict) else None
+            await asyncio.to_thread(record_whatsapp_message_sent, result, template=WHATSAPP_TEMPLATE_REVIEW_REQUEST, order_id=order_id)
             logger.info('Review request WhatsApp sent for order %s, message_id=%s', order_id, message_id)
-        except Exception as exc:
-            logger.error('Failed to send review request WhatsApp for order %s: %s', order_id, exc)
+        except Exception:
+            logger.exception('Failed to send review request WhatsApp for order %s', order_id)
     except Exception:
         logger.exception('Unexpected error in review request scheduler for order %s', order_id)
 
@@ -1995,8 +2127,117 @@ async def verify_whatsapp_webhook(request: Request):
 
 @api_router.post('/webhooks/whatsapp')
 async def handle_whatsapp_webhook(payload: Dict[str, Any], request: Request):
+    """Meta calls this for every delivery-status update (sent/delivered/read/failed) and every
+    inbound customer message, for every template/text message this app has ever sent - this is
+    the *only* source of ground truth for what actually happened to a message after Meta's
+    "accepted" response to the initial send call. Each event is logged in full and, for status
+    callbacks, correlated back to the wamid recorded at send time (record_whatsapp_message_sent)."""
     logger.info('WhatsApp webhook event received: %s', payload)
+
+    for entry in payload.get('entry', []) or []:
+        for change in entry.get('changes', []) or []:
+            value = change.get('value', {}) or {}
+
+            for status_event in value.get('statuses', []) or []:
+                wamid = status_event.get('id')
+                status = status_event.get('status')
+                recipient = status_event.get('recipient_id')
+                errors = status_event.get('errors') or []
+                error_summary = '; '.join(
+                    f"{e.get('code')}: {e.get('title') or e.get('message') or ''}" for e in errors
+                ) if errors else None
+                logger.info(
+                    'WhatsApp status callback - Message ID: %s | Status: %s | Recipient: %s | Error: %s',
+                    wamid, status, recipient, error_summary or 'none',
+                )
+                if wamid:
+                    await db.whatsapp_message_events.update_one(
+                        {'wamid': wamid},
+                        {
+                            '$set': {
+                                'wamid': wamid,
+                                'latest_status': status,
+                                'latest_error': error_summary,
+                                'recipient': recipient,
+                                'updated_at': now_iso(),
+                            },
+                            '$push': {'status_history': {'status': status, 'at': now_iso(), 'error': error_summary}},
+                            '$setOnInsert': {'created_at': now_iso()},
+                        },
+                        upsert=True,
+                    )
+
+            for inbound in value.get('messages', []) or []:
+                logger.info(
+                    'WhatsApp inbound message - Message ID: %s | From: %s | Type: %s',
+                    inbound.get('id'), inbound.get('from'), inbound.get('type'),
+                )
+
     return {'status': 'received'}
+
+
+@api_router.get('/debug/whatsapp')
+async def debug_whatsapp(payload: Dict = Depends(require_admin)):
+    """Admin-only live diagnostic snapshot of the WhatsApp Cloud API integration: current
+    config, Meta's own view of the phone number, whether the access token is actually valid,
+    and the most recent message this app sent plus its latest known delivery status (if the
+    webhook above has heard back about it yet). Gated behind admin auth - phone/app/business
+    IDs and token validity are internal infrastructure details, not something to expose publicly."""
+    config = get_whatsapp_config()
+    result: Dict[str, Any] = {
+        'phone_number_id': config.phone_number_id,
+        'api_version': config.api_version,
+        'graph_url': config.api_url,
+        'webhook_configured': bool(config.verify_token),
+        'access_token_valid': None,
+        'display_phone_number': None,
+        'verified_name': None,
+        'quality_rating': None,
+        'app_id': None,
+        'last_message_id': None,
+        'last_message_status': None,
+    }
+
+    if not config.is_valid:
+        result['access_token_valid'] = False
+        return result
+
+    try:
+        r = await asyncio.to_thread(
+            requests.get,
+            f'https://graph.facebook.com/{config.api_version}/{config.phone_number_id}',
+            headers={'Authorization': f'Bearer {config.access_token}'},
+            params={'fields': 'id,display_phone_number,verified_name,quality_rating,code_verification_status'},
+            timeout=10,
+        )
+        phone_info = r.json()
+        result['display_phone_number'] = phone_info.get('display_phone_number')
+        result['verified_name'] = phone_info.get('verified_name')
+        result['quality_rating'] = phone_info.get('quality_rating')
+        result['code_verification_status'] = phone_info.get('code_verification_status')
+    except Exception:
+        logger.exception('debug/whatsapp: phone number lookup against Meta failed')
+
+    try:
+        r2 = await asyncio.to_thread(
+            requests.get,
+            f'https://graph.facebook.com/{config.api_version}/debug_token',
+            params={'input_token': config.access_token, 'access_token': config.access_token},
+            timeout=10,
+        )
+        token_info = (r2.json() or {}).get('data', {})
+        result['access_token_valid'] = token_info.get('is_valid', False)
+        result['app_id'] = token_info.get('app_id')
+    except Exception:
+        logger.exception('debug/whatsapp: access token debug lookup against Meta failed')
+        result['access_token_valid'] = False
+
+    last_event = await db.whatsapp_message_events.find_one({}, sort=[('created_at', -1)])
+    if last_event:
+        result['last_message_id'] = last_event.get('wamid')
+        result['last_message_status'] = last_event.get('latest_status') or last_event.get('accepted_status')
+
+    return result
 
 @api_router.post('/orders/{oid}/whatsapp')
 async def send_order_whatsapp_message(
@@ -2023,7 +2264,8 @@ async def send_order_whatsapp_message(
         config = get_whatsapp_config()
         if not config.is_valid:
             raise HTTPException(status_code=502, detail='WhatsApp Cloud API is not configured')
-        send_text_message(config, phone, body.message.strip())
+        result = send_text_message(config, phone, body.message.strip())
+        await asyncio.to_thread(record_whatsapp_message_sent, result, template='manual_text', order_id=oid)
     except HTTPException:
         raise
     except Exception:
@@ -2629,8 +2871,8 @@ async def on_start():
         await _create_index_safely(db.orders, 'customer_id')
         start_abandoned_cart_watcher()
         logger.info('Startup complete')
-    except Exception as e:
-        logger.error(f'Startup error: {e}')
+    except Exception:
+        logger.exception('Startup failed')
 
 # Root
 @api_router.get('/')
@@ -2642,8 +2884,8 @@ async def health():
     try:
         await db.command('ping')
         return {'status': 'ok', 'db': 'connected'}
-    except Exception as exc:
-        logger.error('Health check failed: %s', exc)
+    except Exception:
+        logger.exception('Health check failed')
         raise HTTPException(status_code=503, detail='Database unavailable')
 
 app.include_router(api_router)

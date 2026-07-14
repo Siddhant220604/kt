@@ -10,6 +10,7 @@ import PublicLayout from './components/PublicLayout';
 import AdminLayout from './components/AdminLayout';
 import ProtectedRoute from './components/ProtectedRoute';
 import CustomerProtectedRoute from './components/CustomerProtectedRoute';
+import ErrorBoundary from './components/ErrorBoundary';
 import './App.css';
 
 // Public
@@ -53,6 +54,7 @@ const Loading = () => (
 function App() {
   return (
     <div className="App">
+      <ErrorBoundary>
       <HelmetProvider>
       <ThemeProvider>
         <SettingsProvider>
@@ -108,6 +110,7 @@ function App() {
         </SettingsProvider>
       </ThemeProvider>
       </HelmetProvider>
+      </ErrorBoundary>
     </div>
   );
 }

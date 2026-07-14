@@ -5,8 +5,18 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault('MONGO_URL', 'mongodb://localhost:27017')
 
+import pytest
+
 import server
 from services import whatsapp_service
+
+
+@pytest.fixture(autouse=True)
+def _no_real_whatsapp_event_recording(monkeypatch):
+    """record_whatsapp_message_sent writes to Mongo via its own small sync client for
+    delivery-status correlation - tests must never touch a real database, so replace it with
+    a no-op everywhere in this file (nothing here asserts on its behavior)."""
+    monkeypatch.setattr(server, 'record_whatsapp_message_sent', lambda *a, **kw: None)
 
 
 def test_send_order_notification_sends_whatsapp(monkeypatch):
