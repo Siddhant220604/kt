@@ -21,7 +21,7 @@ DEFAULT_TEMPLATE_LANGUAGE_CODE = 'en'
 WHATSAPP_TEMPLATE_PARAM_COUNTS: Dict[str, int] = {
     'order_confirmation': 3,
     'order_packed': 2,
-    'order_out_for_delivery': 2,
+    'order_out_for_dilivery': 2,
     'order_delivered': 2,
     'invoice_ready': 2,
     'review_request': 2,
@@ -167,7 +167,7 @@ def send_template_message(
     """Reusable helper for sending an approved Meta WhatsApp Utility Template message.
 
     This is the single place that builds the Cloud API "template" payload - every order
-    lifecycle notification (order_confirmation, order_packed, order_out_for_delivery,
+    lifecycle notification (order_confirmation, order_packed, order_out_for_dilivery,
     order_delivered, invoice_ready, review_request) calls this instead of building its own
     payload, so the payload shape only has to be correct in one place.
 

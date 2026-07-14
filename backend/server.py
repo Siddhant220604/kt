@@ -1751,13 +1751,13 @@ async def delete_review(rid: str, request: Request, payload: Dict = Depends(requ
 # Meta's Cloud API rejects the send with error #132000):
 #   order_confirmation:       [customer_name, order_id, total_amount]
 #   order_packed:              [customer_name, order_id]
-#   order_out_for_delivery:    [customer_name, order_id]
+#   order_out_for_dilivery:    [customer_name, order_id]
 #   order_delivered:           [customer_name, order_id]
 #   invoice_ready:              [customer_name, order_id]
 #   review_request:            [customer_name, order_id]
 WHATSAPP_TEMPLATE_ORDER_CONFIRMATION = 'order_confirmation'
 WHATSAPP_TEMPLATE_ORDER_PACKED = 'order_packed'
-WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY = 'order_out_for_delivery'
+WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY = 'order_out_for_dilivery'
 WHATSAPP_TEMPLATE_ORDER_DELIVERED = 'order_delivered'
 WHATSAPP_TEMPLATE_INVOICE_READY = 'invoice_ready'
 WHATSAPP_TEMPLATE_REVIEW_REQUEST = 'review_request'
