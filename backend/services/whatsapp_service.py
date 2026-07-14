@@ -14,6 +14,19 @@ WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', 
 # in this project were approved in Meta WhatsApp Manager with this language code.
 DEFAULT_TEMPLATE_LANGUAGE_CODE = 'en'
 
+# Expected body-parameter count for each approved template, exactly as defined in Meta WhatsApp
+# Manager. Used only to log/flag mismatches before sending (Meta's Cloud API rejects a send with
+# error #132000 if the count sent doesn't match the approved template) - it never changes what
+# gets sent. Update this when a template's approved body variables change.
+WHATSAPP_TEMPLATE_PARAM_COUNTS: Dict[str, int] = {
+    'order_confirmation': 3,
+    'order_packed': 2,
+    'order_out_for_delivery': 2,
+    'order_delivered': 2,
+    'invoice_ready': 2,
+    'review_request': 2,
+}
+
 
 def build_whatsapp_number(mobile: str, default_country_code: str) -> str:
     raw = mobile or ''
@@ -181,6 +194,21 @@ def send_template_message(
     if not config.is_valid:
         logger.warning('WhatsApp Cloud API not configured; template "%s" not sent to %s', template_name, phone)
         return None
+
+    actual_param_count = len(body_parameters) if body_parameters else 0
+    expected_param_count = WHATSAPP_TEMPLATE_PARAM_COUNTS.get(template_name)
+    logger.info(
+        'WhatsApp template debug - Template Name: %s | Expected Parameters: %s | Actual Parameters: %s | Parameter Values: %s',
+        template_name,
+        expected_param_count if expected_param_count is not None else 'unknown',
+        actual_param_count,
+        body_parameters,
+    )
+    if expected_param_count is not None and actual_param_count != expected_param_count:
+        logger.warning(
+            'WhatsApp template "%s" parameter count mismatch: expected %s, got %s (values=%s) - Meta will reject this send with #132000',
+            template_name, expected_param_count, actual_param_count, body_parameters,
+        )
 
     payload: Dict[str, Any] = {
         'template': {

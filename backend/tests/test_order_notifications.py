@@ -47,7 +47,7 @@ def test_send_order_notification_sends_whatsapp(monkeypatch):
 
     assert sent['phone'] == '919999999999'
     assert sent['template_name'] == server.WHATSAPP_TEMPLATE_ORDER_CONFIRMATION
-    assert sent['body_parameters'] == ['Alice', 'KT20260708ABC123']
+    assert sent['body_parameters'] == ['Alice', 'KT20260708ABC123', '499.00']
 
 
 def test_send_order_whatsapp_sends_message(monkeypatch):
@@ -86,7 +86,7 @@ def test_send_order_whatsapp_sends_message(monkeypatch):
 
     assert sent['phone'] == '919999999999'
     assert sent['template_name'] == server.WHATSAPP_TEMPLATE_ORDER_CONFIRMATION
-    assert sent['body_parameters'] == ['Alice', 'KT20260708ABC123']
+    assert sent['body_parameters'] == ['Alice', 'KT20260708ABC123', '499.00']
 
 
 def test_send_order_status_update_whatsapp_sends_message(monkeypatch):
@@ -146,18 +146,20 @@ def test_send_order_status_update_whatsapp_uses_template_for_mapped_statuses(mon
     monkeypatch.setattr(server, 'send_template_message', fake_send_template_message)
     monkeypatch.setattr(server, 'send_text_message', fail_if_called)
 
-    order = {'id': 'KT20260708ABC123', 'address': {'name': 'Alice', 'mobile': '9999999999'}}
+    order = {'id': 'KT20260708ABC123', 'total': 499.0, 'address': {'name': 'Alice', 'mobile': '9999999999'}}
 
-    for status, expected_template in [
-        ('confirmed', server.WHATSAPP_TEMPLATE_ORDER_CONFIRMATION),
-        ('packed', server.WHATSAPP_TEMPLATE_ORDER_PACKED),
-        ('out for delivery', server.WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY),
-        ('delivered', server.WHATSAPP_TEMPLATE_ORDER_DELIVERED),
+    for status, expected_template, expected_params in [
+        # order_confirmation is a 3-parameter template (customer name, order id, total amount);
+        # the other three mapped statuses are still 2-parameter templates.
+        ('confirmed', server.WHATSAPP_TEMPLATE_ORDER_CONFIRMATION, ['Alice', 'KT20260708ABC123', '499.00']),
+        ('packed', server.WHATSAPP_TEMPLATE_ORDER_PACKED, ['Alice', 'KT20260708ABC123']),
+        ('out for delivery', server.WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY, ['Alice', 'KT20260708ABC123']),
+        ('delivered', server.WHATSAPP_TEMPLATE_ORDER_DELIVERED, ['Alice', 'KT20260708ABC123']),
     ]:
         sent.clear()
         server.send_order_status_update_whatsapp(order, status, {'business_name': 'Kiran Traders'})
         assert sent['template_name'] == expected_template
-        assert sent['body_parameters'] == ['Alice', 'KT20260708ABC123']
+        assert sent['body_parameters'] == expected_params
 
 
 def test_build_whatsapp_number_normalizes_to_e164():
@@ -330,3 +332,41 @@ def test_send_template_message_skipped_when_config_invalid():
 
     result = whatsapp_service.send_template_message('9999999999', 'order_confirmation', config=InvalidConfig())
     assert result is None
+
+
+def test_send_template_message_logs_expected_vs_actual_param_debug_info(monkeypatch, caplog):
+    class DummyConfig:
+        is_valid = True
+        access_token = 'token'
+        api_url = 'https://graph.facebook.com/v23.0/123/messages'
+        default_country_code = '+91'
+
+    monkeypatch.setattr(whatsapp_service, 'send_whatsapp_message', lambda *a, **k: {'messages': [{'id': 'msgid'}]})
+
+    with caplog.at_level(logging.INFO):
+        whatsapp_service.send_template_message(
+            '9999999999', 'order_confirmation', body_parameters=['Alice', 'KT2026001', '499.00'], config=DummyConfig(),
+        )
+
+    assert 'Template Name: order_confirmation' in caplog.text
+    assert 'Expected Parameters: 3' in caplog.text
+    assert 'Actual Parameters: 3' in caplog.text
+    assert "Parameter Values: ['Alice', 'KT2026001', '499.00']" in caplog.text
+
+
+def test_send_template_message_warns_on_param_count_mismatch(monkeypatch, caplog):
+    class DummyConfig:
+        is_valid = True
+        access_token = 'token'
+        api_url = 'https://graph.facebook.com/v23.0/123/messages'
+        default_country_code = '+91'
+
+    monkeypatch.setattr(whatsapp_service, 'send_whatsapp_message', lambda *a, **k: {'messages': [{'id': 'msgid'}]})
+
+    with caplog.at_level(logging.WARNING):
+        whatsapp_service.send_template_message(
+            '9999999999', 'order_confirmation', body_parameters=['Alice', 'KT2026001'], config=DummyConfig(),
+        )
+
+    assert 'parameter count mismatch' in caplog.text
+    assert 'expected 3, got 2' in caplog.text

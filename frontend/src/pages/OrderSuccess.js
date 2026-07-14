@@ -46,7 +46,19 @@ export default function OrderSuccess() {
           )}
           <div className="mt-6 grid sm:grid-cols-2 gap-3">
             <Link to={`/track/${orderId}`} state={{ mobile }}><Button variant="outline" className="w-full gap-2"><Truck className="h-4 w-4" />Track Order</Button></Link>
-            <a href={`${API}/orders/${orderId}/invoice${mobile ? `?mobile=${mobile}` : ''}`} target="_blank" rel="noreferrer"><Button variant="outline" className="w-full gap-2" data-testid="success-download-invoice"><FileText className="h-4 w-4" />Download Invoice</Button></a>
+            <a
+              href={`${API}/orders/${orderId}/invoice${mobile ? `?mobile=${mobile}` : ''}`}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                if (order?.status !== 'delivered') {
+                  e.preventDefault();
+                  toast.error('Invoice will be available for download once your order is delivered.');
+                }
+              }}
+            >
+              <Button variant="outline" className="w-full gap-2" data-testid="success-download-invoice"><FileText className="h-4 w-4" />Download Invoice</Button>
+            </a>
           </div>
           <div className="mt-3 flex gap-3">
             <a href={`https://wa.me/${settings.whatsapp || '919876543210'}?text=${encodeURIComponent(`Hi, I just placed order ${orderId}`)}`} target="_blank" rel="noreferrer" className="flex-1">

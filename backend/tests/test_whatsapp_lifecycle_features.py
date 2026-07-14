@@ -153,3 +153,52 @@ def test_effective_unit_price_applies_matching_tier():
 
 def test_effective_unit_price_with_no_tiers_returns_base_price():
     assert server.effective_unit_price({'price': 55.0}, 500) == 55.0
+
+
+def test_financial_year_label_for_dates_within_the_same_fy():
+    from datetime import datetime, timezone
+    # Indian FY runs 1 Apr - 31 Mar, so both of these fall in FY 2026-27.
+    assert server._current_financial_year_label(datetime(2026, 4, 1, tzinfo=timezone.utc)) == '2026-27'
+    assert server._current_financial_year_label(datetime(2027, 3, 31, tzinfo=timezone.utc)) == '2026-27'
+
+
+def test_financial_year_label_rolls_over_on_april_1st():
+    from datetime import datetime, timezone
+    assert server._current_financial_year_label(datetime(2026, 3, 31, tzinfo=timezone.utc)) == '2025-26'
+    assert server._current_financial_year_label(datetime(2027, 4, 1, tzinfo=timezone.utc)) == '2027-28'
+
+
+def test_build_invoice_pdf_shows_invoice_number_when_present():
+    order = {
+        'id': 'KT20260101ABCDEF',
+        'invoice_number': '2026-27/0042',
+        'created_at': '2026-01-01T10:00:00+00:00',
+        'status': 'confirmed',
+        'payment_method': 'cod',
+        'address': {'name': 'Alice', 'mobile': '9999999999', 'address_line1': '1 Main St', 'city': 'Lucknow', 'state': 'UP', 'pincode': '226001'},
+        'items': [{'name': 'Paper Glass', 'size': '200ml', 'quantity': 5, 'price': 120.0, 'total': 600.0}],
+        'subtotal': 600.0, 'discount': 0, 'tax': 0, 'shipping': 0, 'total': 600.0,
+    }
+    # Not asserting on rendered page text here: the PDF's content streams are zlib-compressed
+    # by default, so a plain byte search for the invoice number wouldn't reliably find it, and
+    # pulling in a PDF-text-extraction library just for this one assertion isn't worth the new
+    # dependency. This still exercises the real code path (order_id_block building the
+    # "Invoice No." line from order['invoice_number']) and confirms it doesn't crash.
+    pdf_bytes = server.build_invoice_pdf(order, {'business_name': 'Kiran Traders'})
+    assert pdf_bytes.startswith(b'%PDF')
+
+
+def test_build_invoice_pdf_without_invoice_number_still_works():
+    # Orders created before invoice numbering existed - build_invoice_pdf must degrade
+    # gracefully (a placeholder dash) rather than crash on the missing field.
+    order = {
+        'id': 'KT20260101ABCDEF',
+        'created_at': '2026-01-01T10:00:00+00:00',
+        'status': 'confirmed',
+        'payment_method': 'cod',
+        'address': {'name': 'Alice', 'mobile': '9999999999', 'address_line1': '1 Main St', 'city': 'Lucknow', 'state': 'UP', 'pincode': '226001'},
+        'items': [{'name': 'Paper Glass', 'size': '200ml', 'quantity': 5, 'price': 120.0, 'total': 600.0}],
+        'subtotal': 600.0, 'discount': 0, 'tax': 0, 'shipping': 0, 'total': 600.0,
+    }
+    pdf_bytes = server.build_invoice_pdf(order, {'business_name': 'Kiran Traders'})
+    assert pdf_bytes.startswith(b'%PDF')

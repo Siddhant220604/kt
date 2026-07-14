@@ -148,7 +148,19 @@ export default function OrderTracking() {
                 <div><b>Payment:</b> {order.payment_method?.toUpperCase()}</div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                <a href={`${API}/orders/${order.id}/invoice?mobile=${order.address.mobile}`} target="_blank" rel="noreferrer"><Button variant="outline" className="gap-2" data-testid="track-download-invoice"><FileText className="h-4 w-4" />Download Invoice PDF</Button></a>
+                <a
+                  href={`${API}/orders/${order.id}/invoice?mobile=${order.address.mobile}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => {
+                    if (order.status !== 'delivered') {
+                      e.preventDefault();
+                      toast.error('Invoice will be available for download once your order is delivered.');
+                    }
+                  }}
+                >
+                  <Button variant="outline" className="gap-2" data-testid="track-download-invoice"><FileText className="h-4 w-4" />Download Invoice PDF</Button>
+                </a>
                 <a href={`https://wa.me/${settings.whatsapp || '919876543210'}?text=${encodeURIComponent(`Hi, I want an update on order ${order.id}`)}`} target="_blank" rel="noreferrer"><Button variant="outline" className="gap-2"><MessageCircle className="h-4 w-4" />WhatsApp</Button></a>
               </div>
             </div>

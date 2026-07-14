@@ -4,11 +4,12 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, field_validator
-from typing import List, Optional, Any, Dict
+from pydantic import BaseModel, Field, EmailStr, field_validator, ConfigDict
+from typing import List, Optional, Any, Dict, Literal
 import uuid
 from datetime import datetime, timezone, timedelta
 import asyncio
@@ -126,6 +127,44 @@ def gen_order_id() -> str:
     return f"KT{ts}{rand}"
 
 
+def _current_financial_year_label(now: Optional[datetime] = None) -> str:
+    """Indian financial year: 1 Apr - 31 Mar, e.g. 2026-27 for any date from 2026-04-01 to
+    2027-03-31. Matches the numbering scheme already used on the business's printed invoice
+    book, so GST invoice numbers stay consistent whether raised on paper or generated here."""
+    now = now or datetime.now(timezone.utc)
+    fy_start_year = now.year if now.month >= 4 else now.year - 1
+    return f"{fy_start_year}-{str(fy_start_year + 1)[-2:]}"
+
+
+async def generate_invoice_number() -> str:
+    """Atomically allocates the next sequential GST invoice number for the current financial
+    year, e.g. "2026-27/0001". Uses a per-financial-year counter document with $inc (same
+    race-safe pattern as stock reservation elsewhere) so two orders created at the same instant
+    can never be handed the same invoice number."""
+    fy_label = _current_financial_year_label()
+    counter_id = f'invoice_{fy_label}'
+    doc = await db.counters.find_one_and_update(
+        {'id': counter_id},
+        {'$inc': {'seq': 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return f"{fy_label}/{doc['seq']:04d}"
+
+
+async def get_or_assign_invoice_number(order: Dict[str, Any]) -> str:
+    """Orders created before invoice numbering existed won't have one yet - this assigns and
+    persists one the first time such an order's invoice is actually needed, so nothing crashes
+    or shows a blank number for pre-existing orders, without needing a bulk migration."""
+    existing = order.get('invoice_number')
+    if existing:
+        return existing
+    invoice_number = await generate_invoice_number()
+    await db.orders.update_one({'id': order['id']}, {'$set': {'invoice_number': invoice_number}})
+    order['invoice_number'] = invoice_number
+    return invoice_number
+
+
 def generate_razorpay_signature(payload: str, secret: str) -> str:
     return hmac.new(secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
@@ -136,47 +175,78 @@ def verify_razorpay_signature(order_id: str, payment_id: str, signature: str, se
 
 # ------------------ MODELS ------------------
 
+# Strict format constraints shared across models below. Every user-supplied string field that
+# has a well-defined shape (mobile number, PIN code, GST number) is validated against these at
+# the schema level and rejected outright on mismatch - not sanitized/escaped and passed through.
+INDIAN_MOBILE_REGEX = r'^[6-9]\d{9}$'  # 10 digits, Indian mobile numbers never start with 0-5
+INDIAN_PINCODE_REGEX = r'^\d{6}$'
+GST_NUMBER_REGEX = r'^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
+
+
+def _validate_optional_pattern(value: Optional[str], pattern: str, field_label: str) -> Optional[str]:
+    """Shared validator for optional string fields with a strict format: None/'' pass through
+    untouched (field simply wasn't provided), anything else must fully match `pattern`."""
+    if value is None or value == '':
+        return value
+    if not re.fullmatch(pattern, value):
+        raise ValueError(f'Invalid {field_label} format')
+    return value
+
+
+def _empty_string_to_none(value: Any) -> Any:
+    """Frontend forms send '' for an untouched optional email field rather than omitting it.
+    Normalize that to None *before* EmailStr validation runs, so leaving the field blank is
+    accepted as "not provided" while any non-empty value must still be a real email address."""
+    return None if value == '' else value
+
+
 class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=200)
 
 class ChangeEmailRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     email: EmailStr
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
-    confirm_password: str
+    model_config = ConfigDict(extra='forbid')
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=6, max_length=100)
+    confirm_password: str = Field(min_length=1, max_length=100)
 
 class CategoryIn(BaseModel):
-    name: str
-    slug: Optional[str] = None
-    description: Optional[str] = ''
-    icon: Optional[str] = 'Package'
-    image: Optional[str] = ''
-    order: int = 0
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=100)
+    slug: Optional[str] = Field(None, max_length=120)
+    description: Optional[str] = Field('', max_length=1000)
+    icon: Optional[str] = Field('Package', max_length=100)
+    image: Optional[str] = Field('', max_length=2_800_000)
+    order: int = Field(0, ge=0, le=100000)
 
 class PriceTier(BaseModel):
-    min_qty: int = Field(gt=0)
-    price: float = Field(gt=0)
+    model_config = ConfigDict(extra='forbid')
+    min_qty: int = Field(gt=0, le=1_000_000)
+    price: float = Field(gt=0, le=10_000_000)
 
 class ProductIn(BaseModel):
-    name: str
-    slug: Optional[str] = None
-    category_id: str
-    description: str = ''
-    short_description: Optional[str] = ''
-    size: Optional[str] = ''
-    unit: Optional[str] = 'piece'
-    price: float
-    compare_price: Optional[float] = 0
-    moq: int = 1
-    stock: int = 0
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=200)
+    slug: Optional[str] = Field(None, max_length=220)
+    category_id: str = Field(min_length=1, max_length=100)
+    description: str = Field('', max_length=5000)
+    short_description: Optional[str] = Field('', max_length=500)
+    size: Optional[str] = Field('', max_length=50)
+    unit: Optional[str] = Field('piece', max_length=30)
+    price: float = Field(gt=0, le=10_000_000)
+    compare_price: Optional[float] = Field(0, ge=0, le=10_000_000)
+    moq: int = Field(1, ge=1, le=100000)
+    stock: int = Field(0, ge=0, le=10_000_000)
     images: List[str] = []
     specs: Optional[Dict[str, str]] = {}
     featured: bool = False
     active: bool = True
-    tags: List[str] = []
+    tags: List[str] = Field(default_factory=list, max_length=50)
     # Bulk/wholesale pricing: e.g. [{min_qty: 10, price: 95}, {min_qty: 50, price: 90}] means
     # the base `price` applies below 10 units, 95 from 10-49, 90 from 50+. Kept sorted by
     # min_qty ascending so effective_unit_price() can just walk it front-to-back.
@@ -202,81 +272,106 @@ class ProductIn(BaseModel):
                 raise ValueError('Each product image must be under ~2MB')
         return images
 
+    @field_validator('tags')
+    @classmethod
+    def validate_tags(cls, tags: List[str]) -> List[str]:
+        for tag in tags:
+            if not (1 <= len(tag) <= 50):
+                raise ValueError('Each tag must be 1-50 characters')
+        return tags
+
 class CartItem(BaseModel):
-    product_id: str
-    name: str
-    price: float
-    image: Optional[str] = ''
-    size: Optional[str] = ''
-    unit: Optional[str] = 'piece'
-    quantity: int
-    moq: int = 1
+    model_config = ConfigDict(extra='forbid')
+    product_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    price: float = Field(ge=0, le=10_000_000)
+    image: Optional[str] = Field('', max_length=2_800_000)
+    size: Optional[str] = Field('', max_length=50)
+    unit: Optional[str] = Field('piece', max_length=30)
+    quantity: int = Field(gt=0, le=100000)
+    moq: int = Field(1, ge=1, le=100000)
 
 class AddressIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     name: str = Field(min_length=1, max_length=200)
-    mobile: str = Field(min_length=1, max_length=20)
+    mobile: str = Field(pattern=INDIAN_MOBILE_REGEX)
     email: EmailStr
     address_line1: str = Field(min_length=1, max_length=300)
     address_line2: Optional[str] = Field('', max_length=300)
     city: str = Field(min_length=1, max_length=100)
     state: str = Field(min_length=1, max_length=100)
-    pincode: str = Field(min_length=1, max_length=10)
+    pincode: str = Field(pattern=INDIAN_PINCODE_REGEX)
     landmark: Optional[str] = Field('', max_length=200)
     gst_number: Optional[str] = Field('', max_length=20)
 
+    @field_validator('gst_number')
+    @classmethod
+    def validate_gst_number(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GST number')
+
 class OrderIn(BaseModel):
-    items: List[CartItem]
+    model_config = ConfigDict(extra='forbid')
+    items: List[CartItem] = Field(min_length=1, max_length=200)
     address: AddressIn
-    payment_method: str  # cod | upi | bank_transfer | online
+    payment_method: Literal['cod', 'online']
     notes: Optional[str] = Field('', max_length=1000)
     coupon_code: Optional[str] = Field('', max_length=50)
 
 class CartSyncItem(BaseModel):
-    product_id: str
-    name: str
-    price: float
-    quantity: int
+    model_config = ConfigDict(extra='forbid')
+    product_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    price: float = Field(ge=0, le=10_000_000)
+    quantity: int = Field(gt=0, le=100000)
 
 class CartSyncIn(BaseModel):
-    mobile: str = Field(min_length=10, max_length=15)
+    model_config = ConfigDict(extra='forbid')
+    mobile: str = Field(pattern=INDIAN_MOBILE_REGEX)
     name: Optional[str] = Field('', max_length=200)
-    items: List[CartSyncItem] = []
-    subtotal: float = 0
+    items: List[CartSyncItem] = Field(default_factory=list, max_length=200)
+    subtotal: float = Field(0, ge=0, le=100_000_000)
 
 class PaymentCreateOrderRequest(BaseModel):
-    order_id: str
-    amount: Optional[int] = None
-    currency: str = 'INR'
+    model_config = ConfigDict(extra='forbid')
+    order_id: str = Field(min_length=1, max_length=100)
+    amount: Optional[int] = Field(None, gt=0, le=10_000_000_00)
+    currency: str = Field('INR', min_length=3, max_length=3)
     notes: Optional[Dict[str, Any]] = None
 
 class PaymentVerifyRequest(BaseModel):
-    order_id: str
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
+    model_config = ConfigDict(extra='forbid')
+    order_id: str = Field(min_length=1, max_length=100)
+    razorpay_order_id: str = Field(min_length=1, max_length=100)
+    razorpay_payment_id: str = Field(min_length=1, max_length=100)
+    razorpay_signature: str = Field(min_length=1, max_length=200)
 
 class OrderStatusUpdate(BaseModel):
-    status: str  # pending | confirmed | processing | packed | out for delivery | delivered | cancelled
-    tracking_note: Optional[str] = ''
+    model_config = ConfigDict(extra='forbid')
+    status: Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
+    tracking_note: Optional[str] = Field('', max_length=1000)
 
 class TrackOrderRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     order_id: str = Field(min_length=1, max_length=50)
-    mobile: str = Field(min_length=1, max_length=20)
+    mobile: str = Field(pattern=INDIAN_MOBILE_REGEX)
 
 class CustomerSignupIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     name: str = Field(min_length=1, max_length=200)
     email: EmailStr
     password: str = Field(min_length=6, max_length=100)
-    mobile: str = Field(min_length=10, max_length=15)
+    mobile: str = Field(pattern=INDIAN_MOBILE_REGEX)
 
 class CustomerLoginIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     email: EmailStr
     password: str = Field(min_length=1, max_length=100)
 
 class CustomerProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     email: Optional[EmailStr] = None
-    mobile: Optional[str] = Field(None, min_length=10, max_length=15)
+    mobile: Optional[str] = Field(None, pattern=INDIAN_MOBILE_REGEX)
     address_line1: Optional[str] = Field(None, max_length=300)
     address_line2: Optional[str] = Field(None, max_length=300)
     city: Optional[str] = Field(None, max_length=100)
@@ -285,70 +380,103 @@ class CustomerProfileUpdate(BaseModel):
     landmark: Optional[str] = Field(None, max_length=200)
     gst_number: Optional[str] = Field(None, max_length=20)
 
+    @field_validator('pincode')
+    @classmethod
+    def validate_pincode(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_optional_pattern(v, INDIAN_PINCODE_REGEX, 'PIN code')
+
+    @field_validator('gst_number')
+    @classmethod
+    def validate_gst_number(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GST number')
+
 class CustomerPasswordChange(BaseModel):
-    current_password: str
+    model_config = ConfigDict(extra='forbid')
+    current_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=6, max_length=100)
 
 class WhatsAppMessageIn(BaseModel):
-    message: str
-    mobile: Optional[str] = None
+    model_config = ConfigDict(extra='forbid')
+    message: str = Field(min_length=1, max_length=4096)
+    mobile: Optional[str] = Field(None, pattern=r'^\d{10,15}$')
 
 class CouponIn(BaseModel):
-    code: str
-    type: str = 'percent'  # percent | flat
-    value: float
-    min_order: float = 0
-    max_discount: Optional[float] = 0
-    expiry: Optional[str] = ''
+    model_config = ConfigDict(extra='forbid')
+    code: str = Field(min_length=1, max_length=50, pattern=r'^[A-Za-z0-9_-]+$')
+    type: Literal['percent', 'flat'] = 'percent'
+    value: float = Field(gt=0, le=1_000_000)
+    min_order: float = Field(0, ge=0, le=10_000_000)
+    max_discount: Optional[float] = Field(0, ge=0, le=10_000_000)
+    expiry: Optional[str] = Field('', max_length=40)
     active: bool = True
-    usage_limit: int = 0
+    usage_limit: int = Field(0, ge=0, le=1_000_000)
 
 class CouponValidate(BaseModel):
-    code: str = Field(max_length=50)
-    subtotal: float
+    model_config = ConfigDict(extra='forbid')
+    code: str = Field(min_length=1, max_length=50)
+    subtotal: float = Field(ge=0, le=100_000_000)
 
 class BannerIn(BaseModel):
-    title: str
-    subtitle: Optional[str] = ''
-    image: str = ''
-    link: Optional[str] = ''
-    cta_text: Optional[str] = 'Shop Now'
+    model_config = ConfigDict(extra='forbid')
+    title: str = Field(min_length=1, max_length=200)
+    subtitle: Optional[str] = Field('', max_length=300)
+    image: str = Field('', max_length=2_800_000)
+    link: Optional[str] = Field('', max_length=500)
+    cta_text: Optional[str] = Field('Shop Now', max_length=50)
     active: bool = True
-    order: int = 0
+    order: int = Field(0, ge=0, le=100000)
 
 class ReviewIn(BaseModel):
-    product_id: str
+    model_config = ConfigDict(extra='forbid')
+    product_id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
-    rating: int
+    rating: int = Field(ge=1, le=5)
     title: Optional[str] = Field('', max_length=300)
     comment: str = Field(min_length=1, max_length=3000)
-    order_id: Optional[str] = ''
+    order_id: Optional[str] = Field('', max_length=50)
 
 class ContactIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     name: str = Field(min_length=1, max_length=200)
-    email: Optional[str] = Field('', max_length=200)
-    mobile: str = Field(min_length=1, max_length=20)
+    email: Optional[EmailStr] = None
+    mobile: str = Field(pattern=INDIAN_MOBILE_REGEX)
     subject: Optional[str] = Field('', max_length=300)
     message: str = Field(min_length=1, max_length=3000)
 
+    @field_validator('email', mode='before')
+    @classmethod
+    def normalize_email(cls, v: Any) -> Any:
+        return _empty_string_to_none(v)
+
 class SettingsIn(BaseModel):
-    business_name: Optional[str] = None
-    tagline: Optional[str] = None
-    address: Optional[str] = None
-    landmark: Optional[str] = None
-    phone: Optional[str] = None
-    phone2: Optional[str] = None
-    whatsapp: Optional[str] = None
-    email: Optional[str] = None
-    upi_id: Optional[str] = None
-    upi_qr: Optional[str] = None
-    logo: Optional[str] = None
-    bank_details: Optional[str] = None
-    hours: Optional[str] = None
-    gstin: Optional[str] = None
-    tax_rate: Optional[float] = None
-    shipping_flat: Optional[float] = None
-    free_shipping_above: Optional[float] = None
+    model_config = ConfigDict(extra='forbid')
+    business_name: Optional[str] = Field(None, max_length=200)
+    tagline: Optional[str] = Field(None, max_length=300)
+    address: Optional[str] = Field(None, max_length=500)
+    landmark: Optional[str] = Field(None, max_length=200)
+    phone: Optional[str] = Field(None, max_length=20)
+    phone2: Optional[str] = Field(None, max_length=20)
+    whatsapp: Optional[str] = Field(None, max_length=20)
+    email: Optional[EmailStr] = None
+    upi_id: Optional[str] = Field(None, max_length=100)
+    upi_qr: Optional[str] = Field(None, max_length=2_800_000)
+    logo: Optional[str] = Field(None, max_length=2_800_000)
+    bank_details: Optional[str] = Field(None, max_length=1000)
+    hours: Optional[str] = Field(None, max_length=200)
+    gstin: Optional[str] = Field(None, max_length=20)
+    tax_rate: Optional[float] = Field(None, ge=0, le=100)
+    shipping_flat: Optional[float] = Field(None, ge=0, le=100_000)
+    free_shipping_above: Optional[float] = Field(None, ge=0, le=100_000_000)
+
+    @field_validator('email', mode='before')
+    @classmethod
+    def normalize_email(cls, v: Any) -> Any:
+        return _empty_string_to_none(v)
+
+    @field_validator('gstin')
+    @classmethod
+    def validate_gstin(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GSTIN')
 
 # ------------------ AUTH ROUTES ------------------
 
@@ -985,12 +1113,17 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
     shipping = 0.0 if (free_ship_above and taxable >= free_ship_above) else shipping_flat
     total = round(taxable + tax + shipping, 2)
     oid = gen_order_id()
+    # Invoice number is assigned at order placement (not lazily at first download) so it's
+    # raised at the time of sale, matching how a GST tax invoice is meant to work - and stays
+    # stable regardless of when the invoice PDF is actually first viewed.
+    invoice_number = await generate_invoice_number()
     # GST invoices must split tax as IGST for interstate supply and CGST+SGST for intrastate;
     # the business is registered in Uttar Pradesh, so any other billing state is interstate.
     is_interstate = (order.address.state or '').strip().lower() != 'uttar pradesh'
     doc = {
         'id': oid,
         'order_number': oid,
+        'invoice_number': invoice_number,
         'customer_id': payload['sub'],
         'items': validated_items,
         'address': order.address.model_dump(),
@@ -1328,6 +1461,12 @@ async def order_invoice(oid: str, mobile: Optional[str] = None, payload: Optiona
     if not payload:
         if not mobile or str(o['address'].get('mobile', '')).strip() != mobile.strip():
             raise HTTPException(status_code=403, detail='Mobile mismatch')
+        # Customers can only download once the order is actually delivered - admins (payload
+        # is truthy above) are exempt, since they legitimately need to view/print it earlier
+        # (e.g. to attach with the shipment).
+        if o.get('status') != 'delivered':
+            raise HTTPException(status_code=403, detail='Invoice will be available for download once your order is delivered.')
+    await get_or_assign_invoice_number(o)
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
     pdf = build_invoice_pdf(o, settings)
     return Response(content=pdf, media_type='application/pdf', headers={
@@ -1480,8 +1619,15 @@ async def delete_review(rid: str, request: Request, payload: Dict = Depends(requ
 
 # ------------------ WHATSAPP APPROVED TEMPLATES (Meta WhatsApp Manager, Utility category) ------------------
 # Exact template names as approved in Meta WhatsApp Manager. All are approved in English ('en'),
-# which is send_template_message()'s default language_code. Every template here takes the same
-# two body parameters, in order: [customer_name, order_id].
+# which is send_template_message()'s default language_code. Body parameters, in order, per
+# template (must exactly match the approved template's {{1}}, {{2}}, ... variable count, or
+# Meta's Cloud API rejects the send with error #132000):
+#   order_confirmation:       [customer_name, order_id, total_amount]
+#   order_packed:              [customer_name, order_id]
+#   order_out_for_delivery:    [customer_name, order_id]
+#   order_delivered:           [customer_name, order_id]
+#   invoice_ready:              [customer_name, order_id]
+#   review_request:            [customer_name, order_id]
 WHATSAPP_TEMPLATE_ORDER_CONFIRMATION = 'order_confirmation'
 WHATSAPP_TEMPLATE_ORDER_PACKED = 'order_packed'
 WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY = 'order_out_for_delivery'
@@ -1514,6 +1660,7 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
 
     order_id = order.get('id') or order.get('order_number') or 'N/A'
     customer_name = address.get('name') or 'Customer'
+    total_amount = f"{order.get('total', 0):.2f}"
 
     config = get_whatsapp_config()
     if not config.is_valid:
@@ -1522,10 +1669,11 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
 
     try:
         # Order placement/receipt notification -> the order_confirmation approved template.
+        # Body variables: {{1}} customer name, {{2}} order id, {{3}} total amount.
         send_template_message(
             phone,
             WHATSAPP_TEMPLATE_ORDER_CONFIRMATION,
-            body_parameters=[customer_name, order_id],
+            body_parameters=[customer_name, order_id, total_amount],
             config=config,
         )
     except Exception as exc:
@@ -1575,10 +1723,15 @@ def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settin
     try:
         if template_name:
             # Approved Utility Template for the four lifecycle stages Meta has templates for.
+            # order_confirmation expects a 3rd body variable (total amount); the other three
+            # mapped statuses (packed/out for delivery/delivered) are still 2-parameter templates.
+            body_parameters = [customer_name, order_id]
+            if template_name == WHATSAPP_TEMPLATE_ORDER_CONFIRMATION:
+                body_parameters.append(f"{order.get('total', 0):.2f}")
             result = send_template_message(
                 phone,
                 template_name,
-                body_parameters=[customer_name, order_id],
+                body_parameters=body_parameters,
                 config=config,
             )
         else:
@@ -2069,15 +2222,17 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     # ==================== ORDER ID / STATE  |  TRANSPORT / SUPPLY ====================
     seller_state = 'Uttar Pradesh'
     seller_state_code = '09'
+    invoice_number = order.get('invoice_number', '') or '-'
     order_id_block = Table([
+        [Paragraph(f"<b>Invoice No. :</b> {invoice_number}", small_style)],
         [Paragraph('Order ID', label_style)],
         [Paragraph(order.get('id', ''), order_id_style)],
         [Paragraph(f"State : {seller_state}&nbsp;&nbsp;&nbsp;State Code : {seller_state_code}", small_style)],
     ], colWidths=[94*mm])
     order_id_block.setStyle(TableStyle([
         ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
-        ('LINEBELOW', (0, 0), (0, 1), 0.4, BLACK),
+        ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LINEBELOW', (0, 1), (0, 2), 0.4, BLACK),
     ]))
 
     mode_supply_block = Table([
