@@ -1,4 +1,5 @@
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -8,47 +9,20 @@ import jwt
 
 from auth import decode_access_token
 from security import get_client_ip
+from config import rate_limits
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
-_failed_login_attempts: Dict[str, list[datetime]] = defaultdict(list)
-MAX_FAILED_LOGIN_ATTEMPTS = 5
-FAILED_LOGIN_WINDOW_SECONDS = 15 * 60
 
-
-def _cleanup_attempts(ip: str) -> list[datetime]:
-    now = datetime.now(timezone.utc)
-    attempts = [ts for ts in _failed_login_attempts[ip] if (now - ts).total_seconds() <= FAILED_LOGIN_WINDOW_SECONDS]
-    _failed_login_attempts[ip] = attempts
-    return attempts
-
-
-def check_login_rate_limit(request: Request) -> None:
-    ip = get_client_ip(request)
-    attempts = _cleanup_attempts(ip)
-    if len(attempts) >= MAX_FAILED_LOGIN_ATTEMPTS:
-        raise HTTPException(status_code=429, detail='Too many login attempts. Try again later.')
-
-
-def record_failed_login(request: Request) -> None:
-    ip = get_client_ip(request)
-    attempts = _cleanup_attempts(ip)
-    attempts.append(datetime.now(timezone.utc))
-    _failed_login_attempts[ip] = attempts
-
-
-def clear_failed_logins(request: Request) -> None:
-    ip = get_client_ip(request)
-    _failed_login_attempts.pop(ip, None)
-
-
-# Generic per-IP sliding-window rate limiter for unauthenticated, publicly-writable
-# endpoints (contact form, reviews, ...) that would otherwise have no abuse protection.
+# ------------------------------------------------------------------------------------------
+# Generic sliding-window limiter. Keyed by an arbitrary string (caller decides whether that's
+# an IP, an account id, or both) so it backs all three tiers below instead of duplicating the
+# window bookkeeping per tier.
+# ------------------------------------------------------------------------------------------
 _rate_limit_buckets: Dict[str, list[datetime]] = defaultdict(list)
 
 
-def check_rate_limit(request: Request, bucket: str, max_requests: int, window_seconds: int) -> None:
-    key = f'{bucket}:{get_client_ip(request)}'
+def _check_sliding_window(key: str, max_requests: int, window_seconds: int) -> None:
     now = datetime.now(timezone.utc)
     attempts = [ts for ts in _rate_limit_buckets[key] if (now - ts).total_seconds() <= window_seconds]
     if len(attempts) >= max_requests:
@@ -56,6 +30,113 @@ def check_rate_limit(request: Request, bucket: str, max_requests: int, window_se
         raise HTTPException(status_code=429, detail='Too many requests. Please try again later.')
     attempts.append(now)
     _rate_limit_buckets[key] = attempts
+
+
+def check_rate_limit(request: Request, bucket: str, max_requests: int, window_seconds: int) -> None:
+    """Per-IP sliding window. Thresholds are passed in by the caller (see the tiered wrappers
+    below for the recommended, configurable way to do that) rather than hardcoded here."""
+    _check_sliding_window(f'{bucket}:ip:{get_client_ip(request)}', max_requests, window_seconds)
+
+
+def check_public_rate_limit(request: Request, bucket: str) -> None:
+    """Moderate, per-IP limit for unauthenticated but publicly-writable endpoints (contact
+    form, reviews, cart sync). Thresholds come from the PUBLIC tier, overridable per-bucket -
+    see config.rate_limits.get_bucket_limit()."""
+    max_requests, window_seconds = rate_limits.get_bucket_limit(bucket, rate_limits.PUBLIC_MAX_REQUESTS, rate_limits.PUBLIC_WINDOW_SECONDS)
+    check_rate_limit(request, bucket, max_requests, window_seconds)
+
+
+def check_authenticated_rate_limit(request: Request, bucket: str, identity: str) -> None:
+    """Loose, per-account limit for actions by an already-authenticated user (placing an
+    order, updating a profile). Keyed by account id rather than IP - a valid bearer token is
+    itself an abuse barrier, and shared IPs (offices, mobile carriers) shouldn't throttle each
+    other's authenticated actions. Thresholds come from the AUTHENTICATED tier, overridable
+    per-bucket."""
+    max_requests, window_seconds = rate_limits.get_bucket_limit(bucket, rate_limits.AUTHENTICATED_MAX_REQUESTS, rate_limits.AUTHENTICATED_WINDOW_SECONDS)
+    _check_sliding_window(f'{bucket}:account:{identity}', max_requests, window_seconds)
+
+
+# ------------------------------------------------------------------------------------------
+# AUTH tier: login, signup, password change. A flat per-IP ceiling (bounds raw flooding) plus
+# exponential backoff triggered by failures, tracked independently per-IP *and* per-account, so
+# both a distributed attack on one account and repeated attempts against many accounts from one
+# IP are slowed down - without a hard lockout that a legitimate user could get stuck behind.
+# ------------------------------------------------------------------------------------------
+@dataclass
+class _AttemptState:
+    count: int = 0
+    last_attempt: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+_auth_attempts: Dict[str, _AttemptState] = {}
+
+
+def _auth_backoff_seconds(failure_count: int) -> float:
+    if failure_count <= 0:
+        return 0.0
+    return min(rate_limits.AUTH_BACKOFF_MAX_SECONDS, rate_limits.AUTH_BACKOFF_BASE_SECONDS * (2 ** (failure_count - 1)))
+
+
+def _check_auth_backoff(key: str) -> None:
+    now = datetime.now(timezone.utc)
+    state = _auth_attempts.get(key)
+    if not state:
+        return
+    # A quiet key older than the reset window is forgotten entirely, so a stale failure from
+    # long ago can't still be held against a rare/returning legitimate user.
+    if (now - state.last_attempt).total_seconds() > rate_limits.AUTH_BACKOFF_RESET_SECONDS:
+        _auth_attempts.pop(key, None)
+        return
+    wait = _auth_backoff_seconds(state.count)
+    elapsed = (now - state.last_attempt).total_seconds()
+    if elapsed < wait:
+        retry_after = max(1, round(wait - elapsed))
+        raise HTTPException(
+            status_code=429,
+            detail=f'Too many attempts. Please try again in {retry_after} seconds.',
+            headers={'Retry-After': str(retry_after)},
+        )
+
+
+def _record_auth_attempt(key: str) -> None:
+    now = datetime.now(timezone.utc)
+    state = _auth_attempts.get(key)
+    if not state:
+        state = _AttemptState(count=0, last_attempt=now)
+        _auth_attempts[key] = state
+    state.count += 1
+    state.last_attempt = now
+
+
+def _clear_auth_attempts(key: str) -> None:
+    _auth_attempts.pop(key, None)
+
+
+def check_auth_rate_limit(request: Request, bucket: str, account_key: str) -> None:
+    """Call before attempting an authentication action (verifying a password, creating an
+    account). Raises 429 if the flat per-IP ceiling for `bucket` is exceeded, or if either the
+    caller's IP or `account_key` is still within its exponential-backoff cooldown from a
+    recent failure."""
+    ip = get_client_ip(request)
+    max_requests, window_seconds = rate_limits.get_bucket_limit(bucket, rate_limits.AUTH_IP_MAX_ATTEMPTS, rate_limits.AUTH_IP_WINDOW_SECONDS)
+    check_rate_limit(request, bucket, max_requests, window_seconds)
+    _check_auth_backoff(f'{bucket}:ip:{ip}')
+    _check_auth_backoff(f'{bucket}:account:{account_key}')
+
+
+def record_auth_failure(request: Request, bucket: str, account_key: str) -> None:
+    """Call after an authentication action fails (wrong password, duplicate signup) to advance
+    the exponential backoff for both the caller's IP and the targeted account."""
+    ip = get_client_ip(request)
+    _record_auth_attempt(f'{bucket}:ip:{ip}')
+    _record_auth_attempt(f'{bucket}:account:{account_key}')
+
+
+def clear_auth_attempts(request: Request, bucket: str, account_key: str) -> None:
+    """Call after an authentication action succeeds to reset the backoff for both keys."""
+    ip = get_client_ip(request)
+    _clear_auth_attempts(f'{bucket}:ip:{ip}')
+    _clear_auth_attempts(f'{bucket}:account:{account_key}')
 
 
 async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:

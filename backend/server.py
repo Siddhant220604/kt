@@ -27,6 +27,7 @@ import audit
 import dependencies
 import security
 from config.whatsapp import get_whatsapp_config
+from config import rate_limits
 from services.whatsapp_service import build_whatsapp_number, send_text_message, send_template_message
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -353,12 +354,13 @@ class SettingsIn(BaseModel):
 
 @api_router.post('/auth/login')
 async def admin_login(req: LoginRequest, request: Request):
-    dependencies.check_login_rate_limit(request)
-    u = await db.users.find_one({'email': req.email.lower()})
+    email = req.email.lower()
+    dependencies.check_auth_rate_limit(request, 'admin_login', email)
+    u = await db.users.find_one({'email': email})
     if not u or not verify_password(req.password, u.get('password_hash', '')):
-        dependencies.record_failed_login(request)
+        dependencies.record_auth_failure(request, 'admin_login', email)
         raise HTTPException(status_code=401, detail='Invalid email or password')
-    dependencies.clear_failed_logins(request)
+    dependencies.clear_auth_attempts(request, 'admin_login', email)
     token = create_token(u['id'], u['email'], u.get('role', 'admin'), u.get('token_version', 0))
     await audit.record_audit(db, u['email'], security.get_client_ip(request), 'admin_login', u['id'])
     return {'token': token, 'user': {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}}
@@ -407,11 +409,18 @@ async def change_admin_email(req: ChangeEmailRequest, request: Request, payload:
 
 @api_router.post('/admin/profile/password')
 async def change_admin_password(req: ChangePasswordRequest, request: Request, payload: Dict = Depends(require_admin)):
+    # Requiring a valid bearer token already keeps this from being a fully anonymous target,
+    # but someone with a stolen/leaked token could otherwise brute-force current_password with
+    # no limit at all - so it gets the same auth-tier backoff as login, keyed by account id.
+    account_key = payload['sub']
+    dependencies.check_auth_rate_limit(request, 'change_admin_password', account_key)
     if req.new_password != req.confirm_password:
         raise HTTPException(status_code=400, detail='New password and confirmation do not match')
     u = await db.users.find_one({'id': payload['sub']})
     if not u or not auth.verify_password(req.current_password, u.get('password_hash', '')):
+        dependencies.record_auth_failure(request, 'change_admin_password', account_key)
         raise HTTPException(status_code=401, detail='Invalid email or password')
+    dependencies.clear_auth_attempts(request, 'change_admin_password', account_key)
     hashed = auth.hash_password(req.new_password)
     # Bump token_version so any other still-logged-in session (e.g. an attacker who had the
     # old password) is invalidated immediately - then issue a fresh token for *this* session
@@ -838,7 +847,7 @@ async def sync_abandoned_cart(req: CartSyncIn, request: Request):
     """Called opportunistically from the checkout page once the customer has entered a valid
     mobile number, so we have something to remind them with if they never finish checking out.
     Not tied to auth/order creation - just a lightweight snapshot, upserted by mobile number."""
-    dependencies.check_rate_limit(request, 'cart_sync', max_requests=30, window_seconds=300)
+    dependencies.check_rate_limit(request, 'cart_sync', *rate_limits.get_bucket_limit('cart_sync', 30, 300))
     if not req.items:
         await db.abandoned_carts.delete_one({'mobile': req.mobile})
         return {'ok': True}
@@ -927,7 +936,8 @@ def effective_unit_price(product: Dict[str, Any], quantity: int) -> float:
 
 
 @api_router.post('/orders')
-async def create_order(order: OrderIn, background_tasks: BackgroundTasks, payload: Dict = Depends(dependencies.require_customer)):
+async def create_order(order: OrderIn, background_tasks: BackgroundTasks, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'create_order', payload['sub'])
     if not order.items:
         raise HTTPException(status_code=400, detail='No items')
     _check_duplicate_order(order)
@@ -1071,16 +1081,22 @@ async def _link_past_orders_to_customer(customer_id: str, email: str, mobile: st
 
 @api_router.post('/customer/auth/signup')
 async def customer_signup(req: CustomerSignupIn, request: Request):
-    dependencies.check_rate_limit(request, 'customer_signup', max_requests=10, window_seconds=15 * 60)
     email = req.email.lower()
+    # Backoff (not just a flat cap) on signup too: repeatedly probing "does this email/mobile
+    # already have an account" is itself an enumeration attack, so a rejected signup counts as
+    # a failure the same way a wrong password would.
+    dependencies.check_auth_rate_limit(request, 'customer_signup', email)
     if await db.customers.find_one({'email': email}):
+        dependencies.record_auth_failure(request, 'customer_signup', email)
         raise HTTPException(status_code=400, detail='An account with this email already exists')
     mobile = ''.join(ch for ch in req.mobile if ch.isdigit())
     # Mobile must be unique too, not just email: _link_past_orders_to_customer backfills orders
     # by matching mobile OR email, so two accounts sharing a mobile number could otherwise end
     # up with each other's order history silently mixed together.
     if await db.customers.find_one({'mobile': mobile}):
+        dependencies.record_auth_failure(request, 'customer_signup', email)
         raise HTTPException(status_code=400, detail='An account with this mobile number already exists')
+    dependencies.clear_auth_attempts(request, 'customer_signup', email)
     cid = str(uuid.uuid4())
     doc = {
         'id': cid,
@@ -1099,13 +1115,13 @@ async def customer_signup(req: CustomerSignupIn, request: Request):
 
 @api_router.post('/customer/auth/login')
 async def customer_login(req: CustomerLoginIn, request: Request):
-    dependencies.check_login_rate_limit(request)
     email = req.email.lower()
+    dependencies.check_auth_rate_limit(request, 'customer_login', email)
     c = await db.customers.find_one({'email': email})
     if not c or not auth.verify_password(req.password, c.get('password_hash', '')):
-        dependencies.record_failed_login(request)
+        dependencies.record_auth_failure(request, 'customer_login', email)
         raise HTTPException(status_code=401, detail='Invalid email or password')
-    dependencies.clear_failed_logins(request)
+    dependencies.clear_auth_attempts(request, 'customer_login', email)
     await _link_past_orders_to_customer(c['id'], email, c.get('mobile', ''))
     token = create_token(c['id'], email, 'customer', c.get('token_version', 0), expires_delta=timedelta(days=CUSTOMER_TOKEN_EXPIRE_DAYS))
     return {'token': token, 'name': c.get('name', ''), 'email': email}
@@ -1128,7 +1144,8 @@ async def get_customer_profile(payload: Dict = Depends(dependencies.require_cust
 
 
 @api_router.put('/customer/profile')
-async def update_customer_profile(req: CustomerProfileUpdate, payload: Dict = Depends(dependencies.require_customer)):
+async def update_customer_profile(req: CustomerProfileUpdate, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'update_customer_profile', payload['sub'])
     doc = {k: v for k, v in req.model_dump().items() if v is not None}
     if not doc:
         raise HTTPException(status_code=400, detail='Nothing to update')
@@ -1148,10 +1165,14 @@ async def update_customer_profile(req: CustomerProfileUpdate, payload: Dict = De
 
 
 @api_router.post('/customer/profile/password')
-async def change_customer_password(req: CustomerPasswordChange, payload: Dict = Depends(dependencies.require_customer)):
+async def change_customer_password(req: CustomerPasswordChange, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    account_key = payload['sub']
+    dependencies.check_auth_rate_limit(request, 'change_customer_password', account_key)
     c = await db.customers.find_one({'id': payload['sub']})
     if not c or not auth.verify_password(req.current_password, c.get('password_hash', '')):
+        dependencies.record_auth_failure(request, 'change_customer_password', account_key)
         raise HTTPException(status_code=401, detail='Current password is incorrect')
+    dependencies.clear_auth_attempts(request, 'change_customer_password', account_key)
     new_version = c.get('token_version', 0) + 1
     await db.customers.update_one({'id': payload['sub']}, {'$set': {
         'password_hash': auth.hash_password(req.new_password),
@@ -1419,7 +1440,7 @@ async def product_reviews(pid: str):
 
 @api_router.post('/reviews')
 async def create_review(r: ReviewIn, request: Request):
-    dependencies.check_rate_limit(request, 'create_review', max_requests=5, window_seconds=15 * 60)
+    dependencies.check_rate_limit(request, 'create_review', *rate_limits.get_bucket_limit('create_review', 5, 15 * 60))
     if r.rating < 1 or r.rating > 5:
         raise HTTPException(status_code=400, detail='Rating must be 1-5')
     doc = r.model_dump()
@@ -1759,7 +1780,7 @@ async def _send_review_request_after_delay(order_id: str) -> None:
 
 @api_router.post('/contact')
 async def contact_submit(c: ContactIn, request: Request, background_tasks: BackgroundTasks):
-    dependencies.check_rate_limit(request, 'contact_submit', max_requests=5, window_seconds=15 * 60)
+    dependencies.check_rate_limit(request, 'contact_submit', *rate_limits.get_bucket_limit('contact_submit', 5, 15 * 60))
     doc = c.model_dump()
     doc['id'] = str(uuid.uuid4())
     doc['created_at'] = now_iso()
