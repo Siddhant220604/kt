@@ -29,7 +29,8 @@ export default function AdminSettings() {
         email: form.email,
         hours: form.hours,
         gstin: form.gstin,
-        tax_rate: Number(form.tax_rate || 0),
+        cgst_rate: Number(form.cgst_rate || 0),
+        sgst_rate: Number(form.sgst_rate || 0),
         shipping_flat: Number(form.shipping_flat || 0),
         free_shipping_above: Number(form.free_shipping_above || 0),
       });
@@ -63,10 +64,11 @@ export default function AdminSettings() {
       </div>
       <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
         <div className="font-display font-semibold">Shipping & Tax</div>
-        <div className="grid sm:grid-cols-3 gap-3">
-          <div><Label>Tax Rate (%)</Label><Input type="number" value={form.tax_rate || 0} onChange={(e) => upd('tax_rate', e.target.value)} /></div>
-          <div><Label>Shipping (Flat)</Label><Input type="number" value={form.shipping_flat || 0} onChange={(e) => upd('shipping_flat', e.target.value)} /></div>
-          <div><Label>Free shipping above</Label><Input type="number" value={form.free_shipping_above || 0} onChange={(e) => upd('free_shipping_above', e.target.value)} /></div>
+        <div className="grid sm:grid-cols-4 gap-3">
+          <div><Label>CGST Rate (%)</Label><Input type="number" value={form.cgst_rate ?? ''} onChange={(e) => upd('cgst_rate', e.target.value)} /></div>
+          <div><Label>SGST Rate (%)</Label><Input type="number" value={form.sgst_rate ?? ''} onChange={(e) => upd('sgst_rate', e.target.value)} /></div>
+          <div><Label>Shipping (Flat)</Label><Input type="number" value={form.shipping_flat ?? ''} onChange={(e) => upd('shipping_flat', e.target.value)} /></div>
+          <div><Label>Free shipping above</Label><Input type="number" value={form.free_shipping_above ?? ''} onChange={(e) => upd('free_shipping_above', e.target.value)} /></div>
         </div>
       </div>
       <div><Button onClick={save} disabled={saving} data-testid="admin-settings-save">{saving ? 'Saving...' : 'Save Settings'}</Button></div>

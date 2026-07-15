@@ -581,7 +581,8 @@ class SettingsIn(BaseModel):
     bank_details: Optional[str] = Field(None, max_length=1000)
     hours: Optional[str] = Field(None, max_length=200)
     gstin: Optional[str] = Field(None, max_length=20)
-    tax_rate: Optional[float] = Field(None, ge=0, le=100)
+    cgst_rate: Optional[float] = Field(None, ge=0, le=50)
+    sgst_rate: Optional[float] = Field(None, ge=0, le=50)
     shipping_flat: Optional[float] = Field(None, ge=0, le=100_000)
     free_shipping_above: Optional[float] = Field(None, ge=0, le=100_000_000)
 
@@ -1242,7 +1243,9 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
         discount = res['discount']
         coupon_code = res['code']
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
-    tax_rate = settings.get('tax_rate', 0.0)
+    cgst_rate = settings.get('cgst_rate', 0.0)
+    sgst_rate = settings.get('sgst_rate', 0.0)
+    tax_rate = cgst_rate + sgst_rate
     shipping_flat = settings.get('shipping_flat', 0.0)
     free_ship_above = settings.get('free_shipping_above', 0.0)
     taxable = max(0.0, subtotal - discount)
@@ -1273,6 +1276,8 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
         'discount': discount,
         'tax': tax,
         'tax_rate': tax_rate,
+        'cgst_rate': cgst_rate,
+        'sgst_rate': sgst_rate,
         'shipping': shipping,
         'total': total,
         'status': 'pending',
@@ -2631,15 +2636,18 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     tax = order.get('tax', 0)
     shipping = order.get('shipping', 0)
     grand_total = order.get('total', 0)
-    tax_rate = order.get('tax_rate', 0)
+    cgst_rate = order.get('cgst_rate', 0)
+    sgst_rate = order.get('sgst_rate', 0)
+    tax_rate = order.get('tax_rate', cgst_rate + sgst_rate)
     is_interstate = order.get('is_interstate', False)
+    taxable_value = max(0.0, order.get('subtotal', 0) - discount)
     cgst = sgst = igst = 0
     if tax > 0:
         if is_interstate:
             igst = tax
         else:
-            cgst = tax / 2
-            sgst = tax / 2
+            cgst = round(taxable_value * (cgst_rate / 100.0), 2) if cgst_rate else 0.0
+            sgst = round(taxable_value * (sgst_rate / 100.0), 2) if sgst_rate else 0.0
 
     totals_label_style = ParagraphStyle('totlabel', fontSize=8, leading=10, fontName='Helvetica', textColor=BLACK)
     totals_label_bold_style = ParagraphStyle('totlabelbold', fontSize=8.5, leading=10.5, fontName='Helvetica-Bold', textColor=BLACK)
@@ -2653,9 +2661,9 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
         d_rs, d_p = rp(discount)
         total_rows.append([total_label(label), f"-{d_rs}", d_p])
     if cgst > 0:
-        total_rows.append([total_label(f'ADD : CGST @ {tax_rate/2:g}%'), *rp(cgst)])
+        total_rows.append([total_label(f'ADD : CGST @ {cgst_rate:g}%'), *rp(cgst)])
     if sgst > 0:
-        total_rows.append([total_label(f'ADD : SGST @ {tax_rate/2:g}%'), *rp(sgst)])
+        total_rows.append([total_label(f'ADD : SGST @ {sgst_rate:g}%'), *rp(sgst)])
     if igst > 0:
         total_rows.append([total_label(f'ADD : IGST @ {tax_rate:g}%'), *rp(igst)])
     if shipping > 0:
@@ -2799,7 +2807,8 @@ async def seed_db():
             'bank_details': 'Account Name: Kiran Traders\nBank: State Bank of India\nA/C No: 12345678901\nIFSC: SBIN0001234\nBranch: Aashiyana, Lucknow',
             'hours': 'Mon-Wed, Fri-Sun: 10:00 AM - 8:00 PM | Thursday: Closed',
             'gstin': '09AAAAA0000A1Z5',
-            'tax_rate': 0.0,
+            'cgst_rate': 0.0,
+            'sgst_rate': 0.0,
             'shipping_flat': 100.0,
             'free_shipping_above': 2000.0,
             'created_at': now_iso(),

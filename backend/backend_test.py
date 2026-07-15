@@ -892,7 +892,8 @@ class KiranTradersAPITester:
                 "business_name": "Kiran Traders",
                 "tagline": "Wholesale & Retail Packaging Essentials - Since 2004",
                 "phone": "+91 98765 43210",
-                "tax_rate": 0.0
+                "cgst_rate": 0.0,
+                "sgst_rate": 0.0
             }
         )
         return success
