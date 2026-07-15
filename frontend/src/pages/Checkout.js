@@ -29,7 +29,9 @@ export default function Checkout() {
   const [coupons, setCoupons] = useState([]);
   const [loadingCoupons, setLoadingCoupons] = useState(false);
   const shipping = subtotal >= (settings.free_shipping_above || 2000) ? 0 : (settings.shipping_flat || 100);
-  const total = Math.max(0, subtotal - discount) + (items.length > 0 ? shipping : 0);
+  const taxable = Math.max(0, subtotal - discount);
+  const tax = settings.tax_rate ? Math.round(taxable * (settings.tax_rate / 100) * 100) / 100 : 0;
+  const total = taxable + tax + (items.length > 0 ? shipping : 0);
 
   const loadRazorpayScript = () => new Promise((resolve, reject) => {
     if (window.Razorpay) return resolve();
@@ -335,6 +337,7 @@ export default function Checkout() {
                 <div className="flex justify-between"><span>Subtotal</span><span>{formatINR(subtotal)}</span></div>
                 {discount > 0 && <div className="flex justify-between text-emerald-600"><span>Discount ({applied})</span><span>-{formatINR(discount)}</span></div>}
                 <div className="flex justify-between"><span>Shipping</span><span>{shipping === 0 ? 'FREE' : formatINR(shipping)}</span></div>
+                {tax > 0 && <div className="flex justify-between"><span>GST ({settings.tax_rate}%)</span><span>{formatINR(tax)}</span></div>}
                 <div className="border-t border-border pt-2 flex justify-between font-display font-bold text-lg"><span>Total</span><span data-testid="checkout-total">{formatINR(total)}</span></div>
               </div>
               <Button type="submit" size="lg" className="w-full mt-4" disabled={placing} data-testid="place-order-button">

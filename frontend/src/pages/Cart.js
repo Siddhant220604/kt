@@ -19,7 +19,9 @@ export default function Cart() {
   const { settings } = useSettings();
 
   const shipping = subtotal >= (settings.free_shipping_above || 2000) ? 0 : (settings.shipping_flat || 100);
-  const total = Math.max(0, subtotal - discount) + (subtotal > 0 ? shipping : 0);
+  const taxable = Math.max(0, subtotal - discount);
+  const tax = settings.tax_rate ? Math.round(taxable * (settings.tax_rate / 100) * 100) / 100 : 0;
+  const total = taxable + tax + (subtotal > 0 ? shipping : 0);
 
   const applyCoupon = async () => {
     if (!coupon.trim()) return;
@@ -80,6 +82,7 @@ export default function Cart() {
                 <div className="flex justify-between"><span>Subtotal</span><span data-testid="cart-subtotal">{formatINR(subtotal)}</span></div>
                 {discount > 0 && <div className="flex justify-between text-emerald-600"><span>Discount ({applied})</span><span>-{formatINR(discount)}</span></div>}
                 <div className="flex justify-between"><span>Shipping</span><span>{shipping === 0 ? 'FREE' : formatINR(shipping)}</span></div>
+                {tax > 0 && <div className="flex justify-between"><span>GST ({settings.tax_rate}%)</span><span>{formatINR(tax)}</span></div>}
                 <div className="border-t border-border pt-2 mt-2 flex justify-between font-display font-bold text-lg"><span>Total</span><span data-testid="cart-total">{formatINR(total)}</span></div>
                 {subtotal < (settings.free_shipping_above || 2000) && <div className="text-xs text-muted-foreground">Add {formatINR((settings.free_shipping_above || 2000) - subtotal)} more for FREE shipping</div>}
               </div>
