@@ -9,7 +9,7 @@ import { Skeleton } from '../components/ui/skeleton';
 import { Textarea } from '../components/ui/textarea';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Minus, Plus, ShoppingCart, Heart, MessageCircle, Star, ShieldCheck, Truck, Award, ChevronLeft } from 'lucide-react';
+import { Minus, Plus, ShoppingCart, Heart, MessageCircle, Star, ShieldCheck, Truck, Award, ChevronLeft, HelpCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import ProductCard from '../components/ProductCard';
 import { useCart, computeUnitPrice } from '../lib/cart';
@@ -26,10 +26,13 @@ export default function ProductDetail() {
   const [qty, setQty] = useState(1);
   const [activeImg, setActiveImg] = useState(0);
   const [reviews, setReviews] = useState([]);
+  const [questions, setQuestions] = useState([]);
   const { addItem } = useCart();
   const { toggle, has } = useWishlist();
   const { settings } = useSettings();
   const [reviewForm, setReviewForm] = useState({ name: '', rating: 5, title: '', comment: '' });
+  const [questionForm, setQuestionForm] = useState({ name: '', question: '' });
+  const [submittingQuestion, setSubmittingQuestion] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -39,6 +42,8 @@ export default function ProductDetail() {
       setQty(data.moq || 1);
       const { data: rv } = await api.get(`/reviews/product/${data.id}`);
       setReviews(rv);
+      const { data: qs } = await api.get(`/questions/product/${data.id}`);
+      setQuestions(qs);
     } catch (e) {
       toast.error('Product not found');
       navigate('/products');
@@ -102,6 +107,17 @@ export default function ProductDetail() {
       toast.success('Thank you! Your review will appear after admin approval.');
       setReviewForm({ name: '', rating: 5, title: '', comment: '' });
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed to submit review'); }
+  };
+
+  const submitQuestion = async (e) => {
+    e.preventDefault();
+    setSubmittingQuestion(true);
+    try {
+      await api.post('/questions', { ...questionForm, product_id: product.id });
+      toast.success('Thanks! Your question will appear here once answered.');
+      setQuestionForm({ name: '', question: '' });
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to submit question'); }
+    finally { setSubmittingQuestion(false); }
   };
 
   return (
@@ -259,6 +275,37 @@ export default function ProductDetail() {
                     {r.title && <div className="font-semibold">{r.title}</div>}
                     <p className="text-sm text-muted-foreground">{r.comment}</p>
                     <div className="text-xs text-muted-foreground mt-2">- {r.name}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Q&A */}
+          <div className="mt-14">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-display font-bold">Questions & Answers</h2>
+              <Dialog>
+                <DialogTrigger asChild><Button variant="outline" className="gap-2" data-testid="open-question-dialog"><HelpCircle className="h-4 w-4" />Ask a Question</Button></DialogTrigger>
+                <DialogContent>
+                  <DialogHeader><DialogTitle>Ask a Question</DialogTitle></DialogHeader>
+                  <form onSubmit={submitQuestion} className="space-y-3">
+                    <Input required placeholder="Your name" value={questionForm.name} onChange={(e) => setQuestionForm({ ...questionForm, name: e.target.value })} data-testid="question-name-input" />
+                    <Textarea required placeholder="What would you like to know about this product?" rows={4} value={questionForm.question} onChange={(e) => setQuestionForm({ ...questionForm, question: e.target.value })} data-testid="question-text-input" />
+                    <Button type="submit" className="w-full" disabled={submittingQuestion} data-testid="submit-question-button">{submittingQuestion ? 'Submitting...' : 'Submit Question'}</Button>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
+            {questions.length === 0 ? (
+              <div className="text-sm text-muted-foreground bg-card border border-border rounded-2xl p-6 text-center">No questions yet. Ask us anything about this product!</div>
+            ) : (
+              <div className="space-y-3">
+                {questions.map(q => (
+                  <div key={q.id} className="bg-card border border-border rounded-2xl p-4">
+                    <div className="flex items-start gap-2"><HelpCircle className="h-4 w-4 mt-0.5 text-[hsl(var(--brand-terracotta))] shrink-0" /><div className="font-medium text-sm">{q.question}</div></div>
+                    <div className="text-xs text-muted-foreground mt-1 ml-6">- {q.name}</div>
+                    {q.answer && <div className="mt-2 ml-6 text-sm border-l-2 border-primary/30 pl-3">{q.answer}</div>}
                   </div>
                 ))}
               </div>

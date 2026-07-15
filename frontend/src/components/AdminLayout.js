@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as ImageIcon, Star, Mail, Settings as SettingsIcon, User, LogOut, Menu, Store, Sun, Moon, ScrollText } from 'lucide-react';
+import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as ImageIcon, Star, HelpCircle, Mail, Settings as SettingsIcon, User, LogOut, Menu, Store, Sun, Moon, ScrollText } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
 import { useTheme } from '../lib/theme';
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/admin/coupons', label: 'Coupons', icon: Ticket },
   { to: '/admin/banners', label: 'Banners', icon: ImageIcon },
   { to: '/admin/reviews', label: 'Reviews', icon: Star },
+  { to: '/admin/questions', label: 'Questions', icon: HelpCircle },
   { to: '/admin/contacts', label: 'Contacts', icon: Mail },
   { to: '/admin/audit-log', label: 'Audit Log', icon: ScrollText },
   { to: '/admin/profile', label: 'Profile', icon: User },

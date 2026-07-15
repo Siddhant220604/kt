@@ -597,6 +597,16 @@ class ReviewIn(BaseModel):
     comment: str = Field(min_length=1, max_length=3000)
     order_id: Optional[str] = Field('', max_length=50)
 
+class ProductQuestionIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    product_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    question: str = Field(min_length=1, max_length=1000)
+
+class QuestionAnswerIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    answer: str = Field(min_length=1, max_length=2000)
+
 class ContactIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: str = Field(min_length=1, max_length=200)
@@ -2018,6 +2028,50 @@ async def approve_review(rid: str, request: Request, payload: Dict = Depends(req
 async def delete_review(rid: str, request: Request, payload: Dict = Depends(require_admin)):
     await db.reviews.delete_one({'id': rid})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_review', rid)
+    return {'ok': True}
+
+# ------------------ PRODUCT Q&A ------------------
+
+@api_router.get('/questions/product/{pid}')
+async def product_questions(pid: str):
+    # Only answered questions are public - an unanswered one might be a duplicate, off-topic,
+    # or need context admin doesn't want to expose before answering, same moderation gate as
+    # reviews needing approval first.
+    docs = await db.questions.find({'product_id': pid, 'answered': True}, {'_id': 0}).sort('answered_at', -1).to_list(200)
+    return docs
+
+@api_router.post('/questions')
+async def create_question(q: ProductQuestionIn, request: Request):
+    dependencies.check_rate_limit(request, 'create_question', *rate_limits.get_bucket_limit('create_question', 5, 15 * 60))
+    doc = q.model_dump()
+    doc['id'] = str(uuid.uuid4())
+    doc['answer'] = None
+    doc['answered'] = False
+    doc['answered_at'] = None
+    doc['created_at'] = now_iso()
+    await db.questions.insert_one(doc)
+    doc.pop('_id', None)
+    return doc
+
+@api_router.get('/questions')
+async def all_questions(answered: Optional[bool] = None, _: Dict = Depends(require_admin)):
+    q = {} if answered is None else {'answered': answered}
+    docs = await db.questions.find(q, {'_id': 0}).sort('created_at', -1).to_list(500)
+    return docs
+
+@api_router.put('/questions/{qid}/answer')
+async def answer_question(qid: str, req: QuestionAnswerIn, request: Request, payload: Dict = Depends(require_admin)):
+    q = await db.questions.find_one({'id': qid}, {'_id': 0})
+    if not q:
+        raise HTTPException(status_code=404, detail='Question not found')
+    await db.questions.update_one({'id': qid}, {'$set': {'answer': req.answer, 'answered': True, 'answered_at': now_iso()}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'answer_question', qid, {'product_id': q['product_id']})
+    return await db.questions.find_one({'id': qid}, {'_id': 0})
+
+@api_router.delete('/questions/{qid}')
+async def delete_question(qid: str, request: Request, payload: Dict = Depends(require_admin)):
+    await db.questions.delete_one({'id': qid})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_question', qid)
     return {'ok': True}
 
 # ------------------ WHATSAPP APPROVED TEMPLATES (Meta WhatsApp Manager, Utility category) ------------------
