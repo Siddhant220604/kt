@@ -1237,7 +1237,7 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
         # of silently placing the order at full price - the customer saw a discounted total
         # and must be told it changed, not be charged more without explanation.
         try:
-            res = await validate_coupon(CouponValidate(code=order.coupon_code, subtotal=subtotal))
+            res = await validate_coupon(CouponValidate(code=order.coupon_code, subtotal=subtotal), request)
         except HTTPException as e:
             raise HTTPException(status_code=400, detail=f'Coupon "{order.coupon_code}" is no longer valid: {e.detail}')
         discount = res['discount']
