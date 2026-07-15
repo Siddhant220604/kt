@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import asyncio
 import csv
+import zipfile
 import hashlib
 import hmac
 import io
@@ -461,6 +462,16 @@ class OrderStatusUpdate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     status: Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
     tracking_note: Optional[str] = Field('', max_length=1000)
+
+class BulkStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    order_ids: List[str] = Field(min_length=1, max_length=200)
+    status: Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
+    tracking_note: Optional[str] = Field('', max_length=1000)
+
+class BulkOrderIds(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    order_ids: List[str] = Field(min_length=1, max_length=200)
 
 class ReturnItemIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -1822,6 +1833,36 @@ async def export_orders(
         'Content-Disposition': f'attachment; filename=orders-{datetime.now(timezone.utc).strftime("%Y%m%d")}.csv'
     })
 
+# Registered ahead of /orders/{oid} and /orders/{oid}/status below - both share the same
+# 3-segment shape (orders/<x>/status), so FastAPI (matching by registration order) would
+# otherwise treat "bulk" as the {oid} wildcard and this route would never be reached.
+@api_router.put('/orders/bulk/status')
+async def bulk_update_status(req: BulkStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
+    results = []
+    for oid in req.order_ids:
+        try:
+            await _apply_order_status(oid, req.status, req.tracking_note, request, background_tasks, payload.get('email', 'unknown'))
+            results.append({'id': oid, 'ok': True})
+        except HTTPException as e:
+            results.append({'id': oid, 'ok': False, 'error': e.detail})
+    return {'updated': sum(1 for r in results if r['ok']), 'results': results}
+
+@api_router.post('/orders/bulk/invoices')
+async def bulk_invoices(req: BulkOrderIds, _: Dict = Depends(require_admin)):
+    settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for oid in req.order_ids:
+            o = await db.orders.find_one({'id': oid}, {'_id': 0})
+            if not o:
+                continue
+            await get_or_assign_invoice_number(o)
+            pdf = build_invoice_pdf(o, settings)
+            zf.writestr(f'invoice-{oid}.pdf', pdf)
+    return Response(content=buf.getvalue(), media_type='application/zip', headers={
+        'Content-Disposition': f'attachment; filename=invoices-{datetime.now(timezone.utc).strftime("%Y%m%d")}.zip'
+    })
+
 @api_router.get('/orders/{oid}')
 async def get_order(oid: str, _: Dict = Depends(require_admin)):
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
@@ -1829,10 +1870,11 @@ async def get_order(oid: str, _: Dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail='Order not found')
     return o
 
-@api_router.put('/orders/{oid}/status')
-async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
-    valid = ['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
-    if upd.status not in valid:
+ORDER_STATUSES = ['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
+
+
+async def _apply_order_status(oid: str, status: str, tracking_note: str, request: Request, background_tasks: BackgroundTasks, admin_email: str) -> Dict:
+    if status not in ORDER_STATUSES:
         raise HTTPException(status_code=400, detail='Invalid status')
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
@@ -1842,11 +1884,11 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
     # Cancelling releases the stock the order reserved; un-cancelling re-reserves it
     # atomically (so un-cancelling fails cleanly if that stock has since been sold
     # elsewhere), rolling back any lines already reserved if a later one can't be.
-    if upd.status == 'cancelled' and old_status != 'cancelled':
+    if status == 'cancelled' and old_status != 'cancelled':
         for it in o.get('items', []):
             await db.products.update_one({'id': it['product_id']}, {'$inc': {'stock': it['quantity']}})
             background_tasks.add_task(maybe_send_low_stock_alert, it['product_id'])
-    elif old_status == 'cancelled' and upd.status != 'cancelled':
+    elif old_status == 'cancelled' and status != 'cancelled':
         reserved: List[Dict] = []
         for it in o.get('items', []):
             res = await db.products.update_one(
@@ -1862,33 +1904,38 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
             background_tasks.add_task(maybe_send_low_stock_alert, it['product_id'])
 
     hist = o.get('status_history', [])
-    hist.append({'status': upd.status, 'at': now_iso(), 'note': upd.tracking_note or ''})
-    update_fields = {'status': upd.status, 'status_history': hist, 'updated_at': now_iso()}
+    hist.append({'status': status, 'at': now_iso(), 'note': tracking_note or ''})
+    update_fields = {'status': status, 'status_history': hist, 'updated_at': now_iso()}
     # A cancelled order that had already been paid needs a manual refund - flag it so it
     # doesn't get lost. Refunds themselves happen outside this system (bank transfer/UPI),
     # an admin marks it done via /orders/{oid}/mark-refunded once actually processed.
-    if upd.status == 'cancelled' and old_status != 'cancelled' and o.get('payment_status') == 'paid':
+    if status == 'cancelled' and old_status != 'cancelled' and o.get('payment_status') == 'paid':
         update_fields['refund_status'] = 'pending'
     await db.orders.update_one({'id': oid}, {'$set': update_fields})
     updated = await db.orders.find_one({'id': oid}, {'_id': 0})
-    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_order_status', oid, {'status': upd.status})
+    await audit.record_audit(db, admin_email, security.get_client_ip(request), 'update_order_status', oid, {'status': status})
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
     # Only notify on an actual status transition, so re-submitting the same status (e.g. a
     # double click/retry in the admin UI) never sends a duplicate WhatsApp message.
-    status_changed = upd.status != old_status
+    status_changed = status != old_status
     if status_changed:
         # Feature 1: WhatsApp status-update notification (non-blocking).
-        background_tasks.add_task(send_order_status_update_whatsapp, updated, upd.status, settings)
+        background_tasks.add_task(send_order_status_update_whatsapp, updated, status, settings)
         # Feature 2: once delivered, send order_delivered then, immediately after, invoice_ready
         # with the invoice PDF attached. BackgroundTasks runs tasks sequentially in the order
         # they're added, so queuing this after the line above guarantees order_delivered lands
         # before invoice_ready.
-        if upd.status == 'delivered':
+        if status == 'delivered':
             background_tasks.add_task(send_invoice_whatsapp_task, oid, settings, str(request.base_url))
         # Feature 3: once delivered, schedule a one-time review request ~24h later
-        if upd.status == 'delivered':
+        if status == 'delivered':
             schedule_review_request(oid)
     return updated
+
+
+@api_router.put('/orders/{oid}/status')
+async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
+    return await _apply_order_status(oid, upd.status, upd.tracking_note, request, background_tasks, payload.get('email', 'unknown'))
 
 @api_router.post('/orders/{oid}/mark-refunded')
 async def mark_order_refunded(oid: str, request: Request, payload: Dict = Depends(require_admin)):

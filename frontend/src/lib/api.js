@@ -77,8 +77,9 @@ export const formatINR = (n) => new Intl.NumberFormat('en-IN', { style: 'currenc
 // Downloads an authenticated endpoint's response as a file. Plain <a href> can't be
 // used for admin exports since the browser won't attach the Bearer token to a direct
 // navigation - this fetches via the authenticated axios client and saves the blob.
-export const downloadFile = async (path, params, filename) => {
-  const res = await api.get(path, { params, responseType: 'blob' });
+export const downloadFile = async (path, params, filename, config = {}) => {
+  const { method = 'get', data } = config;
+  const res = await api.request({ url: path, method, params, data, responseType: 'blob' });
   const url = window.URL.createObjectURL(res.data);
   const a = document.createElement('a');
   a.href = url;
