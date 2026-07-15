@@ -33,6 +33,7 @@ export default function ProductDetail() {
   const [reviewForm, setReviewForm] = useState({ name: '', rating: 5, title: '', comment: '' });
   const [questionForm, setQuestionForm] = useState({ name: '', question: '' });
   const [submittingQuestion, setSubmittingQuestion] = useState(false);
+  const [bundleSelected, setBundleSelected] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -40,6 +41,9 @@ export default function ProductDetail() {
       const { data } = await api.get(`/products/${idOrSlug}`);
       setProduct(data);
       setQty(data.moq || 1);
+      const initSel = { [data.id]: true };
+      (data.frequently_bought_together || []).forEach(p => { initSel[p.id] = true; });
+      setBundleSelected(initSel);
       const { data: rv } = await api.get(`/reviews/product/${data.id}`);
       setReviews(rv);
       const { data: qs } = await api.get(`/questions/product/${data.id}`);
@@ -98,6 +102,15 @@ export default function ProductDetail() {
         reviewCount: product.review_count || 1,
       },
     } : {}),
+  };
+
+  const bundleItems = [product, ...(product.frequently_bought_together || [])];
+  const toggleBundleItem = (id) => setBundleSelected(s => ({ ...s, [id]: !s[id] }));
+  const bundleTotal = bundleItems.filter(p => bundleSelected[p.id]).reduce((sum, p) => sum + computeUnitPrice(p.price, p.price_tiers, p.moq || 1) * (p.moq || 1), 0);
+  const addBundleToCart = () => {
+    const selected = bundleItems.filter(p => bundleSelected[p.id]);
+    selected.forEach(p => addItem(p, p.moq || 1));
+    toast.success(`${selected.length} item(s) added to cart`);
   };
 
   const submitReview = async (e) => {
@@ -314,6 +327,34 @@ export default function ProductDetail() {
               </div>
             )}
           </div>
+
+          {/* Frequently bought together */}
+          {product.frequently_bought_together && product.frequently_bought_together.length > 0 && (
+            <div className="mt-14">
+              <h2 className="text-2xl font-display font-bold mb-4">Frequently Bought Together</h2>
+              <div className="bg-card border border-border rounded-2xl p-4 sm:p-5">
+                <div className="flex flex-wrap items-stretch gap-3">
+                  {bundleItems.map((p, i) => (
+                    <React.Fragment key={p.id}>
+                      <label className="flex items-center gap-2 border border-border rounded-xl p-2 cursor-pointer min-w-[9rem]">
+                        <input type="checkbox" checked={!!bundleSelected[p.id]} onChange={() => toggleBundleItem(p.id)} data-testid={`bundle-item-${p.id}`} />
+                        <img src={(p.images && p.images[0]) || FALLBACK} alt={p.name} className="h-12 w-12 rounded-lg object-cover" />
+                        <div className="min-w-0">
+                          <div className="text-xs line-clamp-2">{p.name}{p.id === product.id ? ' (this item)' : ''}</div>
+                          <div className="text-xs font-semibold">{formatINR(p.price)}</div>
+                        </div>
+                      </label>
+                      {i < bundleItems.length - 1 && <div className="self-center text-muted-foreground font-bold">+</div>}
+                    </React.Fragment>
+                  ))}
+                </div>
+                <div className="mt-4 flex items-center justify-between flex-wrap gap-3 pt-3 border-t border-border">
+                  <div className="text-sm">Total for selected: <span className="font-display font-bold text-lg">{formatINR(bundleTotal)}</span></div>
+                  <Button onClick={addBundleToCart} className="gap-2" data-testid="add-bundle-to-cart"><ShoppingCart className="h-4 w-4" />Add Selected to Cart</Button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Related */}
           {product.related && product.related.length > 0 && (

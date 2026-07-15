@@ -996,6 +996,28 @@ async def product_import_template(_: Dict = Depends(require_admin)):
         'Content-Disposition': 'attachment; filename=products-import-template.csv'
     })
 
+async def get_frequently_bought_together(pid: str, limit: int = 6) -> List[Dict]:
+    """Co-purchase based cross-sell: other products that most often appear in the same order
+    as `pid`, ranked by how many distinct orders paired them - not category-based like
+    `related`, so it can surface a genuinely complementary item from a different category
+    (e.g. lids bought alongside containers)."""
+    pipeline = [
+        {'$match': {'items.product_id': pid, 'status': {'$ne': 'cancelled'}}},
+        {'$unwind': '$items'},
+        {'$match': {'items.product_id': {'$ne': pid}}},
+        {'$group': {'_id': '$items.product_id', 'count': {'$sum': 1}}},
+        {'$sort': {'count': -1}},
+        {'$limit': limit},
+    ]
+    counts = await db.orders.aggregate(pipeline).to_list(limit)
+    if not counts:
+        return []
+    rank = {c['_id']: i for i, c in enumerate(counts)}
+    products = await db.products.find({'id': {'$in': list(rank.keys())}, 'active': True}, {'_id': 0}).to_list(limit)
+    products.sort(key=lambda p: rank.get(p['id'], len(rank)))
+    return products
+
+
 @api_router.get('/products/{pid}')
 async def get_product(pid: str, admin_payload: Optional[Dict] = Depends(dependencies.optional_admin)):
     p = await db.products.find_one({'id': pid}, {'_id': 0}) or await db.products.find_one({'slug': pid}, {'_id': 0})
@@ -1008,9 +1030,12 @@ async def get_product(pid: str, admin_payload: Optional[Dict] = Depends(dependen
     p['category'] = cat
     # related
     related = await db.products.find({'category_id': p.get('category_id'), 'id': {'$ne': p['id']}, 'active': True}, {'_id': 0}).limit(6).to_list(6)
+    frequently_bought = await get_frequently_bought_together(p['id'])
     if not admin_payload:
         related = [apply_flash_sale(r) for r in related]
+        frequently_bought = [apply_flash_sale(r) for r in frequently_bought]
     p['related'] = related
+    p['frequently_bought_together'] = frequently_bought
     return p
 
 @api_router.post('/products')
