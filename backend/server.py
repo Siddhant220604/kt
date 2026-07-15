@@ -484,18 +484,44 @@ class CustomerProfileUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     email: Optional[EmailStr] = None
     mobile: Optional[str] = Field(None, pattern=INDIAN_MOBILE_REGEX)
-    address_line1: Optional[str] = Field(None, max_length=300)
+
+class SavedAddressIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    label: Optional[str] = Field(None, max_length=50)
+    name: str = Field(min_length=1, max_length=200)
+    mobile: str = Field(pattern=INDIAN_MOBILE_REGEX)
+    address_line1: str = Field(min_length=1, max_length=300)
+    address_line2: Optional[str] = Field('', max_length=300)
+    city: str = Field(min_length=1, max_length=100)
+    state: str = Field(min_length=1, max_length=100)
+    pincode: str = Field(pattern=INDIAN_PINCODE_REGEX)
+    landmark: Optional[str] = Field('', max_length=200)
+    gst_number: Optional[str] = Field(None, max_length=20)
+    is_default: bool = False
+
+    @field_validator('gst_number')
+    @classmethod
+    def validate_gst_number(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GST number')
+
+class SavedAddressUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    label: Optional[str] = Field(None, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    mobile: Optional[str] = Field(None, pattern=INDIAN_MOBILE_REGEX)
+    address_line1: Optional[str] = Field(None, min_length=1, max_length=300)
     address_line2: Optional[str] = Field(None, max_length=300)
-    city: Optional[str] = Field(None, max_length=100)
-    state: Optional[str] = Field(None, max_length=100)
-    pincode: Optional[str] = Field(None, max_length=10)
+    city: Optional[str] = Field(None, min_length=1, max_length=100)
+    state: Optional[str] = Field(None, min_length=1, max_length=100)
+    pincode: Optional[str] = Field(None, pattern=INDIAN_PINCODE_REGEX)
     landmark: Optional[str] = Field(None, max_length=200)
     gst_number: Optional[str] = Field(None, max_length=20)
+    is_default: Optional[bool] = None
 
-    @field_validator('pincode')
+    @field_validator('gst_number')
     @classmethod
-    def validate_pincode(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_optional_pattern(v, INDIAN_PINCODE_REGEX, 'PIN code')
+    def validate_gst_number(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GST number')
 
     @field_validator('gst_number')
     @classmethod
@@ -1470,6 +1496,106 @@ async def change_customer_password(req: CustomerPasswordChange, request: Request
 async def customer_orders(payload: Dict = Depends(dependencies.require_customer)):
     orders = await db.orders.find({'customer_id': payload['sub']}, {'_id': 0}).sort('created_at', -1).to_list(200)
     return orders
+
+
+MAX_CUSTOMER_ADDRESSES = 15
+
+
+async def _get_or_migrate_addresses(customer_id: str) -> List[Dict]:
+    c = await db.customers.find_one({'id': customer_id})
+    if not c:
+        return []
+    addresses = c.get('addresses')
+    if addresses is not None:
+        return addresses
+    # Accounts created before the address book existed may still have a single flat
+    # address on the profile - migrate it in once (rather than running two parallel
+    # address concepts) so nothing already saved is lost.
+    if c.get('address_line1'):
+        legacy = {
+            'id': str(uuid.uuid4()),
+            'label': 'Home',
+            'name': c.get('name', ''),
+            'mobile': c.get('mobile', ''),
+            'address_line1': c.get('address_line1', ''),
+            'address_line2': c.get('address_line2', ''),
+            'city': c.get('city', ''),
+            'state': c.get('state', ''),
+            'pincode': c.get('pincode', ''),
+            'landmark': c.get('landmark', ''),
+            'gst_number': c.get('gst_number', ''),
+            'is_default': True,
+            'created_at': now_iso(),
+        }
+        await db.customers.update_one({'id': customer_id}, {'$set': {'addresses': [legacy]}})
+        return [legacy]
+    await db.customers.update_one({'id': customer_id}, {'$set': {'addresses': []}})
+    return []
+
+
+@api_router.get('/customer/addresses')
+async def list_addresses(payload: Dict = Depends(dependencies.require_customer)):
+    return await _get_or_migrate_addresses(payload['sub'])
+
+
+@api_router.post('/customer/addresses')
+async def add_address(req: SavedAddressIn, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'address_update', payload['sub'])
+    addresses = await _get_or_migrate_addresses(payload['sub'])
+    if len(addresses) >= MAX_CUSTOMER_ADDRESSES:
+        raise HTTPException(status_code=400, detail=f'You can save up to {MAX_CUSTOMER_ADDRESSES} addresses. Delete one before adding another.')
+    new_addr = req.model_dump()
+    new_addr['id'] = str(uuid.uuid4())
+    new_addr['created_at'] = now_iso()
+    make_default = new_addr['is_default'] or not addresses
+    new_addr['is_default'] = make_default
+    if make_default:
+        for a in addresses:
+            a['is_default'] = False
+    addresses.append(new_addr)
+    await db.customers.update_one({'id': payload['sub']}, {'$set': {'addresses': addresses}})
+    return addresses
+
+
+@api_router.put('/customer/addresses/{address_id}')
+async def update_address(address_id: str, req: SavedAddressUpdate, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'address_update', payload['sub'])
+    addresses = await _get_or_migrate_addresses(payload['sub'])
+    idx = next((i for i, a in enumerate(addresses) if a.get('id') == address_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail='Address not found')
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    addresses[idx] = {**addresses[idx], **updates}
+    if updates.get('is_default'):
+        for i, a in enumerate(addresses):
+            a['is_default'] = (i == idx)
+    await db.customers.update_one({'id': payload['sub']}, {'$set': {'addresses': addresses}})
+    return addresses
+
+
+@api_router.delete('/customer/addresses/{address_id}')
+async def delete_address(address_id: str, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'address_update', payload['sub'])
+    addresses = await _get_or_migrate_addresses(payload['sub'])
+    remaining = [a for a in addresses if a.get('id') != address_id]
+    if len(remaining) == len(addresses):
+        raise HTTPException(status_code=404, detail='Address not found')
+    if remaining and not any(a.get('is_default') for a in remaining):
+        remaining[0]['is_default'] = True
+    await db.customers.update_one({'id': payload['sub']}, {'$set': {'addresses': remaining}})
+    return remaining
+
+
+@api_router.post('/customer/addresses/{address_id}/default')
+async def set_default_address(address_id: str, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'address_update', payload['sub'])
+    addresses = await _get_or_migrate_addresses(payload['sub'])
+    if not any(a.get('id') == address_id for a in addresses):
+        raise HTTPException(status_code=404, detail='Address not found')
+    for a in addresses:
+        a['is_default'] = (a.get('id') == address_id)
+    await db.customers.update_one({'id': payload['sub']}, {'$set': {'addresses': addresses}})
+    return addresses
 
 
 @api_router.get('/customer/wishlist')

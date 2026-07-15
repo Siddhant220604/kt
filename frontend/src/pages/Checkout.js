@@ -28,6 +28,8 @@ export default function Checkout() {
   const [applied, setApplied] = useState(loc.state?.coupon || '');
   const [coupons, setCoupons] = useState([]);
   const [loadingCoupons, setLoadingCoupons] = useState(false);
+  const [addresses, setAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState('new');
   const shipping = subtotal >= (settings.free_shipping_above || 2000) ? 0 : (settings.shipping_flat || 100);
   const taxable = Math.max(0, subtotal - discount);
   const cgst = settings.cgst_rate ? Math.round(taxable * (settings.cgst_rate / 100) * 100) / 100 : 0;
@@ -73,24 +75,32 @@ export default function Checkout() {
     fetchCoupons();
   }, []);
 
-  // Pre-fill delivery details from the signed-in customer's saved profile (checkout is now
-  // only reachable while logged in, via CustomerProtectedRoute) - fields stay fully editable
-  // since a delivery address can differ from the account's saved one.
+  const applyAddress = (a) => {
+    setSelectedAddressId(a.id);
+    setForm(f => ({
+      ...f,
+      name: a.name, mobile: a.mobile, address_line1: a.address_line1, address_line2: a.address_line2 || '',
+      city: a.city, state: a.state, pincode: a.pincode, landmark: a.landmark || '', gst_number: a.gst_number || '',
+    }));
+  };
+
+  const useNewAddress = () => {
+    setSelectedAddressId('new');
+    setForm(f => ({ ...f, address_line1: '', address_line2: '', city: 'Lucknow', state: 'Uttar Pradesh', pincode: '', landmark: '', gst_number: '' }));
+  };
+
+  // Pre-fill delivery details from the signed-in customer's account (checkout is now only
+  // reachable while logged in, via CustomerProtectedRoute) - fields stay fully editable since
+  // a delivery address can differ from any saved one. A saved address (if any default/first
+  // one exists) takes priority over the bare profile name/mobile, being more specific.
   useEffect(() => {
     api.get('/customer/profile').then(({ data }) => {
-      setForm(f => ({
-        ...f,
-        name: f.name || data.name || '',
-        mobile: f.mobile || data.mobile || '',
-        email: f.email || data.email || '',
-        address_line1: f.address_line1 || data.address_line1 || '',
-        address_line2: f.address_line2 || data.address_line2 || '',
-        city: data.city ? data.city : f.city,
-        state: data.state ? data.state : f.state,
-        pincode: f.pincode || data.pincode || '',
-        landmark: f.landmark || data.landmark || '',
-        gst_number: f.gst_number || data.gst_number || '',
-      }));
+      setForm(f => ({ ...f, name: f.name || data.name || '', mobile: f.mobile || data.mobile || '', email: f.email || data.email || '' }));
+    }).catch(() => {});
+    api.get('/customer/addresses').then(({ data }) => {
+      setAddresses(data || []);
+      const def = (data || []).find(a => a.is_default) || (data || [])[0];
+      if (def) applyAddress(def);
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -233,6 +243,27 @@ export default function Checkout() {
         </div>
         <form onSubmit={submit} className="grid lg:grid-cols-[1fr,380px] gap-6">
           <div className="space-y-6">
+            {addresses.length > 0 && (
+              <div className="bg-card border border-border rounded-2xl p-5 sm:p-6">
+                <div className="font-display font-semibold text-lg mb-4">Choose a delivery address</div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  {addresses.map(a => (
+                    <label key={a.id} className={`flex items-start gap-2 p-3 border rounded-xl cursor-pointer text-sm ${selectedAddressId === a.id ? 'border-primary bg-primary/5' : 'border-border'}`}>
+                      <input type="radio" name="saved-address" className="mt-1" checked={selectedAddressId === a.id} onChange={() => applyAddress(a)} />
+                      <div className="min-w-0">
+                        <div className="font-medium">{a.label || 'Address'}{a.is_default && <span className="text-[10px] text-primary ml-1">(Default)</span>}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">{a.name} · {a.mobile}</div>
+                        <div className="text-xs text-muted-foreground">{a.address_line1}, {a.city}, {a.state} - {a.pincode}</div>
+                      </div>
+                    </label>
+                  ))}
+                  <label className={`flex items-center gap-2 p-3 border rounded-xl cursor-pointer text-sm ${selectedAddressId === 'new' ? 'border-primary bg-primary/5' : 'border-border'}`}>
+                    <input type="radio" name="saved-address" checked={selectedAddressId === 'new'} onChange={useNewAddress} />
+                    <div className="font-medium">+ Deliver to a new address</div>
+                  </label>
+                </div>
+              </div>
+            )}
             {/* Address */}
             <div className="bg-card border border-border rounded-2xl p-5 sm:p-6">
               <div className="font-display font-semibold text-lg mb-4">Delivery Details</div>
