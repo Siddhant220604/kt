@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as ImageIcon, Star, HelpCircle, Mail, Settings as SettingsIcon, User, LogOut, Menu, Store, Sun, Moon, ScrollText, UserCog } from 'lucide-react';
+import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as ImageIcon, Star, HelpCircle, Mail, Settings as SettingsIcon, User, LogOut, Menu, Store, Sun, Moon, ScrollText, UserCog, BarChart3 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
 import { useTheme } from '../lib/theme';
@@ -11,6 +11,7 @@ import { logoutAdmin, isTokenExpired, isAdminOwner } from '../lib/api';
 // backend's require_staff vs require_admin split.
 const navItems = [
   { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard, staffAllowed: false },
+  { to: '/admin/analytics', label: 'Analytics', icon: BarChart3, staffAllowed: false },
   { to: '/admin/orders', label: 'Orders', icon: ShoppingBag, staffAllowed: true },
   { to: '/admin/products', label: 'Products', icon: Package, staffAllowed: false },
   { to: '/admin/categories', label: 'Categories', icon: Tags, staffAllowed: false },

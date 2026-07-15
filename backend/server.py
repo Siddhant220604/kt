@@ -3002,6 +3002,68 @@ async def admin_stats(_: Dict = Depends(require_admin)):
         'top_products': top_products,
     }
 
+@api_router.get('/admin/analytics')
+async def admin_analytics(days: int = Query(30, ge=1, le=180), _: Dict = Depends(require_admin)):
+    days = min(days, 180)
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=days - 1)
+
+    docs = await db.orders.find(
+        {'status': {'$ne': 'cancelled'}, 'created_at': {'$gte': start.strftime('%Y-%m-%d')}},
+        {'_id': 0, 'created_at': 1, 'total': 1, 'customer_id': 1},
+    ).to_list(200000)
+
+    by_day: Dict[str, Dict] = {}
+    for i in range(days):
+        d = (now - timedelta(days=days - 1 - i)).strftime('%Y-%m-%d')
+        by_day[d] = {'revenue': 0.0, 'orders': 0}
+    for o in docs:
+        d = (o.get('created_at') or '')[:10]
+        if d in by_day:
+            by_day[d]['revenue'] += o.get('total', 0)
+            by_day[d]['orders'] += 1
+    revenue_trend = [{'date': k, 'revenue': round(v['revenue'], 2), 'orders': v['orders']} for k, v in by_day.items()]
+    total_revenue_range = round(sum(v['revenue'] for v in by_day.values()), 2)
+    total_orders_range = sum(v['orders'] for v in by_day.values())
+    avg_order_value = round(total_revenue_range / total_orders_range, 2) if total_orders_range else 0.0
+
+    # Repeat-customer rate: keyed by customer_id (the account, not address.mobile) - since the
+    # address book means a customer can ship to a different mobile/address per order, mobile
+    # is no longer a reliable stand-in for "the same customer".
+    order_counts_by_customer: Dict[str, int] = {}
+    for o in docs:
+        cid = o.get('customer_id')
+        if cid:
+            order_counts_by_customer[cid] = order_counts_by_customer.get(cid, 0) + 1
+    total_customers_range = len(order_counts_by_customer)
+    repeat_customers = sum(1 for c in order_counts_by_customer.values() if c > 1)
+    repeat_rate = round(repeat_customers / total_customers_range * 100, 1) if total_customers_range else 0.0
+
+    top_pipeline = [
+        {'$match': {'status': {'$ne': 'cancelled'}, 'created_at': {'$gte': start.strftime('%Y-%m-%d')}}},
+        {'$unwind': '$items'},
+        {'$group': {'_id': '$items.product_id', 'name': {'$last': '$items.name'}, 'qty': {'$sum': '$items.quantity'}, 'revenue': {'$sum': '$items.total'}}},
+        {'$sort': {'revenue': -1}},
+        {'$limit': 10},
+    ]
+    top_products = await db.orders.aggregate(top_pipeline).to_list(10)
+    for tp in top_products:
+        tp['product_id'] = tp.pop('_id')
+        tp['revenue'] = round(tp.get('revenue', 0), 2)
+
+    return {
+        'days': days,
+        'revenue_trend': revenue_trend,
+        'total_revenue_range': total_revenue_range,
+        'total_orders_range': total_orders_range,
+        'avg_order_value': avg_order_value,
+        'total_customers_range': total_customers_range,
+        'repeat_customers': repeat_customers,
+        'one_time_customers': total_customers_range - repeat_customers,
+        'repeat_rate': repeat_rate,
+        'top_products': top_products,
+    }
+
 @api_router.get('/admin/audit-logs')
 async def list_audit_logs(
     page: int = Query(1, ge=1),

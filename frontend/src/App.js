@@ -47,6 +47,7 @@ const AdminContacts = lazy(() => import('./pages/admin/Contacts'));
 const AdminSettings = lazy(() => import('./pages/admin/Settings'));
 const AdminAuditLog = lazy(() => import('./pages/admin/AuditLog'));
 const AdminUsers = lazy(() => import('./pages/admin/Users'));
+const AdminAnalytics = lazy(() => import('./pages/admin/Analytics'));
 
 const Loading = () => (
   <div className="flex items-center justify-center min-h-[60vh]">
@@ -96,6 +97,7 @@ function App() {
                             land on /admin/orders, not bounce through a blank flash */}
                         <Route path="/admin/dashboard" element={<AdminDashboard />} />
                         <Route element={<OwnerOnlyRoute />}>
+                          <Route path="/admin/analytics" element={<AdminAnalytics />} />
                           <Route path="/admin/products" element={<AdminProducts />} />
                           <Route path="/admin/categories" element={<AdminCategories />} />
                           <Route path="/admin/coupons" element={<AdminCoupons />} />
