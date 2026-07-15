@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api, formatINR } from '../../lib/api';
+import { Link, Navigate } from 'react-router-dom';
+import { api, formatINR, isAdminOwner } from '../../lib/api';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -11,7 +11,11 @@ const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
-  useEffect(() => { api.get('/admin/stats').then(r => setStats(r.data)); }, []);
+  useEffect(() => { if (isAdminOwner()) api.get('/admin/stats').then(r => setStats(r.data)); }, []);
+
+  // Staff accounts don't have access to /admin/stats (revenue/financial overview) - send them
+  // straight to the page they actually use.
+  if (!isAdminOwner()) return <Navigate to="/admin/orders" replace />;
 
   if (!stats) return <div className="grid md:grid-cols-4 gap-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>;
 

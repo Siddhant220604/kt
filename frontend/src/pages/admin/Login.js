@@ -24,8 +24,9 @@ export default function AdminLogin() {
     try {
       const { data } = await api.post('/auth/login', { email, password });
       localStorage.setItem('kt_admin_token', data.token);
+      localStorage.setItem('kt_admin_role', data.user?.role || 'admin');
       toast.success('Welcome back!');
-      nav('/admin/dashboard');
+      nav(data.user?.role === 'staff' ? '/admin/orders' : '/admin/dashboard');
     } catch (error) {
       const detail = error.response?.data?.detail;
       toast.error(detail || 'Invalid email or password');

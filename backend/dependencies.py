@@ -139,7 +139,7 @@ def clear_auth_attempts(request: Request, bucket: str, account_key: str) -> None
     _clear_auth_attempts(f'{bucket}:account:{account_key}')
 
 
-async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:
+async def _require_admin_role(creds: Optional[HTTPAuthorizationCredentials], allowed_roles: set) -> Dict:
     if creds is None or creds.scheme.lower() != 'bearer':
         raise HTTPException(status_code=401, detail='Missing or invalid authorization header')
     try:
@@ -148,7 +148,7 @@ async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(
         raise HTTPException(status_code=401, detail='Token expired')
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail='Invalid token')
-    if payload.get('role') != 'admin':
+    if payload.get('role') not in allowed_roles:
         raise HTTPException(status_code=403, detail='Admin access required')
 
     from server import db as server_db
@@ -158,6 +158,21 @@ async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(
     if payload.get('token_version', 0) != user.get('token_version', 0):
         raise HTTPException(status_code=401, detail='Token invalidated')
     return payload
+
+
+async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:
+    """Full admin only. Used on everything sensitive - settings, catalog/coupon/banner
+    management, financial exports, user management, moderation, audit log - anything outside
+    the restricted 'staff' role's order-fulfillment scope (see require_staff)."""
+    return await _require_admin_role(creds, {'admin'})
+
+
+async def require_staff(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:
+    """Full admin OR the restricted 'staff' role. Only wired up on the endpoints a staff
+    account should reach: their own profile, and order fulfillment (view/update status/
+    refund/return/bulk actions, and looking up customers for order context). Everything else
+    stays behind require_admin."""
+    return await _require_admin_role(creds, {'admin', 'staff'})
 
 
 async def require_customer(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> Dict:

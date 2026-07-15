@@ -9,6 +9,7 @@ import { SettingsProvider } from './lib/settings';
 import PublicLayout from './components/PublicLayout';
 import AdminLayout from './components/AdminLayout';
 import ProtectedRoute from './components/ProtectedRoute';
+import OwnerOnlyRoute from './components/OwnerOnlyRoute';
 import CustomerProtectedRoute from './components/CustomerProtectedRoute';
 import ErrorBoundary from './components/ErrorBoundary';
 import './App.css';
@@ -45,6 +46,7 @@ const AdminQuestions = lazy(() => import('./pages/admin/Questions'));
 const AdminContacts = lazy(() => import('./pages/admin/Contacts'));
 const AdminSettings = lazy(() => import('./pages/admin/Settings'));
 const AdminAuditLog = lazy(() => import('./pages/admin/AuditLog'));
+const AdminUsers = lazy(() => import('./pages/admin/Users'));
 
 const Loading = () => (
   <div className="flex items-center justify-center min-h-[60vh]">
@@ -86,20 +88,25 @@ function App() {
                     <Route element={<ProtectedRoute />}>
                       <Route element={<AdminLayout />}>
                         <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
-                        <Route path="/admin/dashboard" element={<AdminDashboard />} />
                         <Route path="/admin/orders" element={<AdminOrders />} />
                         <Route path="/admin/orders/:oid" element={<AdminOrderDetail />} />
-                        <Route path="/admin/products" element={<AdminProducts />} />
-                        <Route path="/admin/categories" element={<AdminCategories />} />
                         <Route path="/admin/customers" element={<AdminCustomers />} />
-                        <Route path="/admin/coupons" element={<AdminCoupons />} />
-                        <Route path="/admin/banners" element={<AdminBanners />} />
-                        <Route path="/admin/reviews" element={<AdminReviews />} />
-                        <Route path="/admin/questions" element={<AdminQuestions />} />
-                        <Route path="/admin/contacts" element={<AdminContacts />} />
                         <Route path="/admin/profile" element={<AdminProfile />} />
-                        <Route path="/admin/settings" element={<AdminSettings />} />
-                        <Route path="/admin/audit-log" element={<AdminAuditLog />} />
+                        {/* Dashboard handles its own owner-check redirect since staff should
+                            land on /admin/orders, not bounce through a blank flash */}
+                        <Route path="/admin/dashboard" element={<AdminDashboard />} />
+                        <Route element={<OwnerOnlyRoute />}>
+                          <Route path="/admin/products" element={<AdminProducts />} />
+                          <Route path="/admin/categories" element={<AdminCategories />} />
+                          <Route path="/admin/coupons" element={<AdminCoupons />} />
+                          <Route path="/admin/banners" element={<AdminBanners />} />
+                          <Route path="/admin/reviews" element={<AdminReviews />} />
+                          <Route path="/admin/questions" element={<AdminQuestions />} />
+                          <Route path="/admin/contacts" element={<AdminContacts />} />
+                          <Route path="/admin/settings" element={<AdminSettings />} />
+                          <Route path="/admin/audit-log" element={<AdminAuditLog />} />
+                          <Route path="/admin/users" element={<AdminUsers />} />
+                        </Route>
                       </Route>
                     </Route>
                     <Route path="*" element={<NotFound />} />

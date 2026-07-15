@@ -170,6 +170,7 @@ hash_password = auth.hash_password
 verify_password = auth.verify_password
 create_token = auth.create_access_token
 require_admin = dependencies.require_admin
+require_staff = dependencies.require_staff
 
 def gen_order_id() -> str:
     ts = datetime.now(timezone.utc).strftime('%Y%m%d')
@@ -328,6 +329,18 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=6, max_length=100)
     confirm_password: str = Field(min_length=1, max_length=100)
+
+class AdminUserIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=200)
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=100)
+    role: Literal['admin', 'staff'] = 'staff'
+
+class AdminUserUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    role: Optional[Literal['admin', 'staff']] = None
 
 class CategoryIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -688,38 +701,38 @@ async def admin_login(req: LoginRequest, request: Request):
     return {'token': token, 'user': {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}}
 
 @api_router.get('/auth/me')
-async def me(payload: Dict = Depends(require_admin)):
+async def me(payload: Dict = Depends(require_staff)):
     u = await db.users.find_one({'id': payload['sub']})
     if not u:
         raise HTTPException(status_code=404, detail='User not found')
     return {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}
 
 @api_router.get('/profile')
-async def get_profile(payload: Dict = Depends(require_admin)):
+async def get_profile(payload: Dict = Depends(require_staff)):
     u = await db.users.find_one({'id': payload['sub']})
     if not u:
         raise HTTPException(status_code=404, detail='User not found')
     return {'name': u.get('name', ''), 'email': u['email'], 'role': u.get('role', 'admin')}
 
 @api_router.get('/login-history')
-async def get_login_history(payload: Dict = Depends(require_admin)):
+async def get_login_history(payload: Dict = Depends(require_staff)):
     logs = await db.audit_logs.find({'admin_email': payload.get('email'), 'action': 'admin_login'}, {'_id': 0}).sort('timestamp', -1).limit(50).to_list(50)
     return logs
 
 @api_router.get('/admin/profile')
-async def get_admin_profile(payload: Dict = Depends(require_admin)):
+async def get_admin_profile(payload: Dict = Depends(require_staff)):
     u = await db.users.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0, 'token_version': 0})
     if not u:
         raise HTTPException(status_code=404, detail='User not found')
     return {'id': u['id'], 'email': u['email'], 'name': u.get('name', ''), 'role': u.get('role', 'admin')}
 
 @api_router.get('/admin/login-history')
-async def get_admin_login_history(payload: Dict = Depends(require_admin)):
+async def get_admin_login_history(payload: Dict = Depends(require_staff)):
     logs = await db.audit_logs.find({'admin_email': payload.get('email'), 'action': 'admin_login'}, {'_id': 0}).sort('timestamp', -1).limit(50).to_list(50)
     return logs
 
 @api_router.post('/admin/profile/email')
-async def change_admin_email(req: ChangeEmailRequest, request: Request, payload: Dict = Depends(require_admin)):
+async def change_admin_email(req: ChangeEmailRequest, request: Request, payload: Dict = Depends(require_staff)):
     email = security.sanitize_value(req.email).lower()
     if await db.users.find_one({'email': email}):
         raise HTTPException(status_code=400, detail='Email already in use')
@@ -730,7 +743,7 @@ async def change_admin_email(req: ChangeEmailRequest, request: Request, payload:
     return {'ok': True, 'email': email}
 
 @api_router.post('/admin/profile/password')
-async def change_admin_password(req: ChangePasswordRequest, request: Request, payload: Dict = Depends(require_admin)):
+async def change_admin_password(req: ChangePasswordRequest, request: Request, payload: Dict = Depends(require_staff)):
     # Requiring a valid bearer token already keeps this from being a fully anonymous target,
     # but someone with a stolen/leaked token could otherwise brute-force current_password with
     # no limit at all - so it gets the same auth-tier backoff as login, keyed by account id.
@@ -754,13 +767,67 @@ async def change_admin_password(req: ChangePasswordRequest, request: Request, pa
     return {'ok': True, 'token': new_token}
 
 @api_router.post('/admin/profile/logout-all')
-async def logout_all_admin_devices(request: Request, payload: Dict = Depends(require_admin)):
+async def logout_all_admin_devices(request: Request, payload: Dict = Depends(require_staff)):
     user = await db.users.find_one({'id': payload['sub']})
     if not user:
         raise HTTPException(status_code=404, detail='User not found')
     token_version = user.get('token_version', 0) + 1
     await db.users.update_one({'id': payload['sub']}, {'$set': {'token_version': token_version}})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'logout_all_devices', payload['sub'])
+    return {'ok': True}
+
+# ------------------ ADMIN / STAFF USER MANAGEMENT ------------------
+# Full-admin only (require_admin, not require_staff) - a staff account must never be able to
+# create/promote/delete admin-panel accounts, including its own.
+
+@api_router.get('/admin/users')
+async def list_admin_users(_: Dict = Depends(require_admin)):
+    return await db.users.find({}, {'_id': 0, 'password_hash': 0, 'token_version': 0}).sort('created_at', -1).to_list(500)
+
+@api_router.post('/admin/users')
+async def create_admin_user(u: AdminUserIn, request: Request, payload: Dict = Depends(require_admin)):
+    email = u.email.lower()
+    if await db.users.find_one({'email': email}):
+        raise HTTPException(status_code=400, detail='An account with this email already exists')
+    doc = {
+        'id': str(uuid.uuid4()),
+        'email': email,
+        'password_hash': auth.hash_password(u.password),
+        'name': u.name,
+        'role': u.role,
+        'token_version': 0,
+        'created_at': now_iso(),
+    }
+    await db.users.insert_one(doc)
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'create_admin_user', doc['id'], {'email': email, 'role': u.role})
+    doc.pop('_id', None)
+    doc.pop('password_hash', None)
+    return doc
+
+@api_router.put('/admin/users/{uid}')
+async def update_admin_user(uid: str, req: AdminUserUpdate, request: Request, payload: Dict = Depends(require_admin)):
+    doc = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not doc:
+        raise HTTPException(status_code=400, detail='Nothing to update')
+    if uid == payload['sub'] and doc.get('role') == 'staff':
+        raise HTTPException(status_code=400, detail='You cannot demote your own account')
+    res = await db.users.update_one({'id': uid}, {'$set': doc})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail='User not found')
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_admin_user', uid, doc)
+    return await db.users.find_one({'id': uid}, {'_id': 0, 'password_hash': 0, 'token_version': 0})
+
+@api_router.delete('/admin/users/{uid}')
+async def delete_admin_user(uid: str, request: Request, payload: Dict = Depends(require_admin)):
+    if uid == payload['sub']:
+        raise HTTPException(status_code=400, detail='You cannot delete your own account')
+    target = await db.users.find_one({'id': uid})
+    if not target:
+        raise HTTPException(status_code=404, detail='User not found')
+    if target.get('role') == 'admin' and await db.users.count_documents({'role': 'admin'}) <= 1:
+        raise HTTPException(status_code=400, detail='Cannot delete the last remaining admin account')
+    await db.users.delete_one({'id': uid})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_admin_user', uid, {'email': target.get('email')})
     return {'ok': True}
 
 # ------------------ CATEGORIES ------------------
@@ -1782,7 +1849,7 @@ async def list_orders(
     search: Optional[str] = None,
     page: int = 1,
     limit: int = 30,
-    _: Dict = Depends(require_admin),
+    _: Dict = Depends(require_staff),
 ):
     q: Dict = {}
     if status_f:
@@ -1837,7 +1904,7 @@ async def export_orders(
 # 3-segment shape (orders/<x>/status), so FastAPI (matching by registration order) would
 # otherwise treat "bulk" as the {oid} wildcard and this route would never be reached.
 @api_router.put('/orders/bulk/status')
-async def bulk_update_status(req: BulkStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
+async def bulk_update_status(req: BulkStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_staff)):
     results = []
     for oid in req.order_ids:
         try:
@@ -1848,7 +1915,7 @@ async def bulk_update_status(req: BulkStatusUpdate, request: Request, background
     return {'updated': sum(1 for r in results if r['ok']), 'results': results}
 
 @api_router.post('/orders/bulk/invoices')
-async def bulk_invoices(req: BulkOrderIds, _: Dict = Depends(require_admin)):
+async def bulk_invoices(req: BulkOrderIds, _: Dict = Depends(require_staff)):
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -1864,7 +1931,7 @@ async def bulk_invoices(req: BulkOrderIds, _: Dict = Depends(require_admin)):
     })
 
 @api_router.get('/orders/{oid}')
-async def get_order(oid: str, _: Dict = Depends(require_admin)):
+async def get_order(oid: str, _: Dict = Depends(require_staff)):
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
         raise HTTPException(status_code=404, detail='Order not found')
@@ -1934,11 +2001,11 @@ async def _apply_order_status(oid: str, status: str, tracking_note: str, request
 
 
 @api_router.put('/orders/{oid}/status')
-async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_admin)):
+async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request, background_tasks: BackgroundTasks, payload: Dict = Depends(require_staff)):
     return await _apply_order_status(oid, upd.status, upd.tracking_note, request, background_tasks, payload.get('email', 'unknown'))
 
 @api_router.post('/orders/{oid}/mark-refunded')
-async def mark_order_refunded(oid: str, request: Request, payload: Dict = Depends(require_admin)):
+async def mark_order_refunded(oid: str, request: Request, payload: Dict = Depends(require_staff)):
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
         raise HTTPException(status_code=404, detail='Order not found')
@@ -1998,7 +2065,7 @@ async def request_return(oid: str, req: ReturnRequestIn, request: Request, paylo
 
 
 @api_router.put('/orders/{oid}/return')
-async def resolve_return(oid: str, req: ReturnResolveIn, request: Request, payload: Dict = Depends(require_admin)):
+async def resolve_return(oid: str, req: ReturnResolveIn, request: Request, payload: Dict = Depends(require_staff)):
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
         raise HTTPException(status_code=404, detail='Order not found')
@@ -2044,7 +2111,7 @@ async def order_invoice(oid: str, mobile: Optional[str] = None, payload: Optiona
 # ------------------ CUSTOMERS ------------------
 
 @api_router.get('/customers')
-async def list_customers(_: Dict = Depends(require_admin)):
+async def list_customers(_: Dict = Depends(require_staff)):
     pipeline = [
         {'$group': {
             '_id': '$address.mobile',

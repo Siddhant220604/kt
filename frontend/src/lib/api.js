@@ -27,6 +27,7 @@ export const isTokenExpired = (token) => {
 
 export const logoutAdmin = (message) => {
   localStorage.removeItem('kt_admin_token');
+  localStorage.removeItem('kt_admin_role');
   if (message) {
     toast.error(message);
   }
@@ -40,6 +41,9 @@ export const logoutCustomer = () => {
   localStorage.removeItem('kt_customer_name');
   localStorage.removeItem('kt_customer_email');
 };
+
+export const getAdminRole = () => localStorage.getItem('kt_admin_role') || 'admin';
+export const isAdminOwner = () => getAdminRole() === 'admin';
 
 export const isCustomerLoggedIn = () => {
   const token = localStorage.getItem('kt_customer_token');

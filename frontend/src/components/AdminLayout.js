@@ -1,29 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as ImageIcon, Star, HelpCircle, Mail, Settings as SettingsIcon, User, LogOut, Menu, Store, Sun, Moon, ScrollText } from 'lucide-react';
+import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as ImageIcon, Star, HelpCircle, Mail, Settings as SettingsIcon, User, LogOut, Menu, Store, Sun, Moon, ScrollText, UserCog } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
 import { useTheme } from '../lib/theme';
-import { logoutAdmin, isTokenExpired } from '../lib/api';
+import { logoutAdmin, isTokenExpired, isAdminOwner } from '../lib/api';
 
+// `staffAllowed: true` marks the handful of pages a restricted 'staff' account can reach
+// (order fulfillment + their own profile) - everything else is full-admin only, matching the
+// backend's require_staff vs require_admin split.
 const navItems = [
-  { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/admin/orders', label: 'Orders', icon: ShoppingBag },
-  { to: '/admin/products', label: 'Products', icon: Package },
-  { to: '/admin/categories', label: 'Categories', icon: Tags },
-  { to: '/admin/customers', label: 'Customers', icon: Users },
-  { to: '/admin/coupons', label: 'Coupons', icon: Ticket },
-  { to: '/admin/banners', label: 'Banners', icon: ImageIcon },
-  { to: '/admin/reviews', label: 'Reviews', icon: Star },
-  { to: '/admin/questions', label: 'Questions', icon: HelpCircle },
-  { to: '/admin/contacts', label: 'Contacts', icon: Mail },
-  { to: '/admin/audit-log', label: 'Audit Log', icon: ScrollText },
-  { to: '/admin/profile', label: 'Profile', icon: User },
-  { to: '/admin/settings', label: 'Settings', icon: SettingsIcon },
+  { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard, staffAllowed: false },
+  { to: '/admin/orders', label: 'Orders', icon: ShoppingBag, staffAllowed: true },
+  { to: '/admin/products', label: 'Products', icon: Package, staffAllowed: false },
+  { to: '/admin/categories', label: 'Categories', icon: Tags, staffAllowed: false },
+  { to: '/admin/customers', label: 'Customers', icon: Users, staffAllowed: true },
+  { to: '/admin/coupons', label: 'Coupons', icon: Ticket, staffAllowed: false },
+  { to: '/admin/banners', label: 'Banners', icon: ImageIcon, staffAllowed: false },
+  { to: '/admin/reviews', label: 'Reviews', icon: Star, staffAllowed: false },
+  { to: '/admin/questions', label: 'Questions', icon: HelpCircle, staffAllowed: false },
+  { to: '/admin/contacts', label: 'Contacts', icon: Mail, staffAllowed: false },
+  { to: '/admin/audit-log', label: 'Audit Log', icon: ScrollText, staffAllowed: false },
+  { to: '/admin/users', label: 'Staff Accounts', icon: UserCog, staffAllowed: false },
+  { to: '/admin/profile', label: 'Profile', icon: User, staffAllowed: true },
+  { to: '/admin/settings', label: 'Settings', icon: SettingsIcon, staffAllowed: false },
 ];
 
 const SidebarContent = ({ onNav }) => {
   const { pathname } = useLocation();
+  const owner = isAdminOwner();
+  const items = navItems.filter(i => owner || i.staffAllowed);
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-4 border-b border-border">
@@ -36,7 +42,7 @@ const SidebarContent = ({ onNav }) => {
         </Link>
       </div>
       <nav className="flex-1 p-3 space-y-0.5">
-        {navItems.map(({ to, label, icon: Icon }) => {
+        {items.map(({ to, label, icon: Icon }) => {
           const active = pathname.startsWith(to);
           return (
             <Link key={to} to={to} onClick={onNav} data-testid={`admin-nav-${label.toLowerCase()}`}
