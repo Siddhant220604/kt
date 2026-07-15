@@ -340,7 +340,9 @@ class AdminUserIn(BaseModel):
 class AdminUserUpdate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: Optional[str] = Field(None, min_length=1, max_length=200)
+    email: Optional[EmailStr] = None
     role: Optional[Literal['admin', 'staff']] = None
+    password: Optional[str] = Field(None, min_length=6, max_length=100)
 
 class CategoryIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -808,15 +810,33 @@ async def create_admin_user(u: AdminUserIn, request: Request, payload: Dict = De
 
 @api_router.put('/admin/users/{uid}')
 async def update_admin_user(uid: str, req: AdminUserUpdate, request: Request, payload: Dict = Depends(require_admin)):
-    doc = {k: v for k, v in req.model_dump().items() if v is not None}
+    target = await db.users.find_one({'id': uid})
+    if not target:
+        raise HTTPException(status_code=404, detail='User not found')
+    doc: Dict = {}
+    if req.name is not None:
+        doc['name'] = req.name
+    if req.role is not None:
+        if uid == payload['sub'] and req.role == 'staff':
+            raise HTTPException(status_code=400, detail='You cannot demote your own account')
+        doc['role'] = req.role
+    if req.email is not None:
+        email = req.email.lower()
+        existing = await db.users.find_one({'email': email})
+        if existing and existing['id'] != uid:
+            raise HTTPException(status_code=400, detail='Another account already uses this email')
+        doc['email'] = email
+    if req.password is not None:
+        doc['password_hash'] = auth.hash_password(req.password)
+        # Bumps token_version so any session already logged in as this account is invalidated -
+        # same as a self-service password change; the account holder must sign in again with
+        # the new password admin just set.
+        doc['token_version'] = target.get('token_version', 0) + 1
     if not doc:
         raise HTTPException(status_code=400, detail='Nothing to update')
-    if uid == payload['sub'] and doc.get('role') == 'staff':
-        raise HTTPException(status_code=400, detail='You cannot demote your own account')
-    res = await db.users.update_one({'id': uid}, {'$set': doc})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail='User not found')
-    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_admin_user', uid, doc)
+    await db.users.update_one({'id': uid}, {'$set': doc})
+    audit_fields = {k: v for k, v in doc.items() if k != 'password_hash'}
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_admin_user', uid, audit_fields)
     return await db.users.find_one({'id': uid}, {'_id': 0, 'password_hash': 0, 'token_version': 0})
 
 @api_router.delete('/admin/users/{uid}')
