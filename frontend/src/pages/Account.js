@@ -10,6 +10,7 @@ import { Skeleton } from '../components/ui/skeleton';
 import { User, MapPin, Mail, LockKeyhole, LogOut, Package } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, formatINR, logoutCustomer } from '../lib/api';
+import { useWishlist } from '../lib/wishlist';
 
 const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', processing: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
 
@@ -17,6 +18,7 @@ const emptyProfile = { name: '', email: '', mobile: '', address_line1: '', addre
 
 export default function Account() {
   const nav = useNavigate();
+  const { resetOnLogout } = useWishlist();
   const [profile, setProfile] = useState(null);
   const [form, setForm] = useState(emptyProfile);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -78,7 +80,7 @@ export default function Account() {
     finally { setSavingPw(false); }
   };
 
-  const logout = () => { logoutCustomer(); nav('/'); };
+  const logout = () => { logoutCustomer(); resetOnLogout(); nav('/'); };
 
   if (!profile) return (
     <Section><Container className="max-w-4xl"><Skeleton className="h-64 rounded-2xl" /></Container></Section>

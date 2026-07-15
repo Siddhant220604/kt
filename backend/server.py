@@ -507,6 +507,10 @@ class CustomerPasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=6, max_length=100)
 
+class WishlistMerge(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    product_ids: List[str] = Field(default_factory=list, max_length=500)
+
 class WhatsAppMessageIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
     message: str = Field(min_length=1, max_length=4096)
@@ -1466,6 +1470,40 @@ async def change_customer_password(req: CustomerPasswordChange, request: Request
 async def customer_orders(payload: Dict = Depends(dependencies.require_customer)):
     orders = await db.orders.find({'customer_id': payload['sub']}, {'_id': 0}).sort('created_at', -1).to_list(200)
     return orders
+
+
+@api_router.get('/customer/wishlist')
+async def get_wishlist(payload: Dict = Depends(dependencies.require_customer)):
+    c = await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'wishlist': 1})
+    return {'product_ids': (c or {}).get('wishlist', [])}
+
+
+@api_router.post('/customer/wishlist/merge')
+async def merge_wishlist(req: WishlistMerge, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    # Called once right after login to fold in any product IDs a guest saved to
+    # localStorage before signing in, so switching devices/browsers never loses a save
+    # that was already made - the account's list is the union, never a replace.
+    dependencies.check_authenticated_rate_limit(request, 'wishlist_merge', payload['sub'])
+    if req.product_ids:
+        await db.customers.update_one({'id': payload['sub']}, {'$addToSet': {'wishlist': {'$each': req.product_ids}}})
+    c = await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'wishlist': 1})
+    return {'product_ids': (c or {}).get('wishlist', [])}
+
+
+@api_router.post('/customer/wishlist/{product_id}')
+async def add_to_wishlist(product_id: str, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'wishlist_update', payload['sub'])
+    await db.customers.update_one({'id': payload['sub']}, {'$addToSet': {'wishlist': product_id}})
+    c = await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'wishlist': 1})
+    return {'product_ids': (c or {}).get('wishlist', [])}
+
+
+@api_router.delete('/customer/wishlist/{product_id}')
+async def remove_from_wishlist(product_id: str, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'wishlist_update', payload['sub'])
+    await db.customers.update_one({'id': payload['sub']}, {'$pull': {'wishlist': product_id}})
+    c = await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'wishlist': 1})
+    return {'product_ids': (c or {}).get('wishlist', [])}
 
 
 @api_router.get('/orders')

@@ -8,10 +8,12 @@ import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
 import { UserPlus } from 'lucide-react';
 import { api } from '../lib/api';
+import { useWishlist } from '../lib/wishlist';
 
 export default function SignUp() {
   const nav = useNavigate();
   const loc = useLocation();
+  const { syncAfterLogin } = useWishlist();
   const [form, setForm] = useState({ name: '', email: '', mobile: '', password: '', confirm: '' });
   const [loading, setLoading] = useState(false);
 
@@ -31,6 +33,7 @@ export default function SignUp() {
       localStorage.setItem('kt_customer_token', data.token);
       localStorage.setItem('kt_customer_name', data.name);
       localStorage.setItem('kt_customer_email', data.email);
+      syncAfterLogin();
       toast.success(`Welcome, ${data.name}!`);
       nav(loc.state?.from?.pathname || '/account', { replace: true, state: loc.state?.from?.state });
     } catch (err) {
