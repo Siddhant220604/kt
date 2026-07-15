@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { api, errorMessage } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -20,15 +20,19 @@ export default function AdminCategories() {
   const save = async () => {
     if (!edit.name) return toast.error('Name required');
     try {
-      if (edit.id) await api.put(`/categories/${edit.id}`, edit); else await api.post('/categories', edit);
+      // Whitelisted to what CategoryIn accepts (extra='forbid') - the category list response
+      // also carries read-only fields (id, created_at, product_count) that aren't part of the
+      // model, and sending them along caused every edit (never a new category) to fail.
+      const payload = { name: edit.name, slug: edit.slug || undefined, description: edit.description, icon: edit.icon, image: edit.image, order: Number(edit.order || 0) };
+      if (edit.id) await api.put(`/categories/${edit.id}`, payload); else await api.post('/categories', payload);
       toast.success('Saved'); setEdit(null); load();
-    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    } catch (e) { toast.error(errorMessage(e, 'Failed')); }
   };
 
   const del = async (c) => {
     if (!window.confirm(`Delete "${c.name}"?`)) return;
     try { await api.delete(`/categories/${c.id}`); toast.success('Deleted'); load(); }
-    catch (e) { toast.error(e.response?.data?.detail || 'Failed to delete category'); }
+    catch (e) { toast.error(errorMessage(e, 'Failed to delete category')); }
   };
 
   return (

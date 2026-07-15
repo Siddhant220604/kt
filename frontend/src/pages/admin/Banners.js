@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { api, errorMessage } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -18,9 +18,13 @@ export default function AdminBanners() {
 
   const save = async () => {
     try {
-      if (edit.id) await api.put(`/banners/${edit.id}`, edit); else await api.post('/banners', edit);
+      // Whitelisted to what BannerIn accepts (extra='forbid') - the banner list response also
+      // carries read-only fields (id, created_at) that aren't part of the model, and sending
+      // them along caused every edit (never a new banner) to fail.
+      const payload = { title: edit.title, subtitle: edit.subtitle, image: edit.image, link: edit.link, cta_text: edit.cta_text, active: edit.active, order: Number(edit.order || 0) };
+      if (edit.id) await api.put(`/banners/${edit.id}`, payload); else await api.post('/banners', payload);
       toast.success('Saved'); setEdit(null); load();
-    } catch (e) { toast.error('Failed'); }
+    } catch (e) { toast.error(errorMessage(e, 'Failed')); }
   };
   const del = async (b) => { if (!window.confirm('Delete banner?')) return; await api.delete(`/banners/${b.id}`); load(); };
 

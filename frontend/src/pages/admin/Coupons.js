@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, formatINR } from '../../lib/api';
+import { api, formatINR, errorMessage } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -19,10 +19,18 @@ export default function AdminCoupons() {
 
   const save = async () => {
     try {
-      const payload = { ...edit, value: Number(edit.value), min_order: Number(edit.min_order || 0), max_discount: Number(edit.max_discount || 0), usage_limit: Number(edit.usage_limit || 0) };
+      // Whitelisted to what CouponIn accepts (extra='forbid') - the coupon list response also
+      // carries read-only fields (id, created_at, used_count) that aren't part of the model,
+      // and sending them along caused every edit (never a new coupon) to fail.
+      const payload = {
+        code: edit.code, type: edit.type, value: Number(edit.value),
+        min_order: Number(edit.min_order || 0), max_discount: Number(edit.max_discount || 0),
+        starts_at: edit.starts_at || '', expiry: edit.expiry || '',
+        active: edit.active, usage_limit: Number(edit.usage_limit || 0),
+      };
       if (edit.id) await api.put(`/coupons/${edit.id}`, payload); else await api.post('/coupons', payload);
       toast.success('Saved'); setEdit(null); load();
-    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    } catch (e) { toast.error(errorMessage(e, 'Failed')); }
   };
 
   const del = async (c) => { if (!window.confirm('Delete coupon?')) return; await api.delete(`/coupons/${c.id}`); toast.success('Deleted'); load(); };

@@ -78,6 +78,20 @@ api.interceptors.response.use(
 
 export const formatINR = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
 
+// FastAPI's `detail` is usually a plain string, but on a 422 validation error it's an array of
+// {loc, msg, type} objects instead - passing that straight into toast.error(...) throws
+// "Objects are not valid as a React child" and crashes the whole app (caught by the top-level
+// ErrorBoundary as a blank "Something went wrong" page). Always route error toasts through
+// this so a validation error degrades to a readable message instead of a crash.
+export const errorMessage = (err, fallback = 'Something went wrong') => {
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === 'string' && detail) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((d) => (typeof d === 'string' ? d : d?.msg || JSON.stringify(d))).join('; ');
+  }
+  return fallback;
+};
+
 // Downloads an authenticated endpoint's response as a file. Plain <a href> can't be
 // used for admin exports since the browser won't attach the Bearer token to a direct
 // navigation - this fetches via the authenticated axios client and saves the blob.

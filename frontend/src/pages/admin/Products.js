@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, formatINR, downloadFile } from '../../lib/api';
+import { api, formatINR, downloadFile, errorMessage } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -57,12 +57,28 @@ export default function AdminProducts() {
     if (!edit.name || !edit.category_id) return toast.error('Name and category are required');
     setSaving(true);
     try {
+      // Whitelisted to exactly the fields the backend's ProductIn model accepts (extra='forbid') -
+      // `edit` is seeded from the product list/detail response, which also carries read-only
+      // fields like id/created_at/avg_rating/review_count (and, for categories, product_count).
+      // Spreading `...edit` straight into the request body sent those along too, and the
+      // resulting 422 validation error crashed the whole app when rendered (see errorMessage).
       const payload = {
-        ...edit,
+        name: edit.name,
+        slug: edit.slug || undefined,
+        category_id: edit.category_id,
+        description: edit.description,
+        short_description: edit.short_description,
+        size: edit.size,
+        unit: edit.unit,
         price: Number(edit.price),
         compare_price: Number(edit.compare_price || 0),
         moq: Number(edit.moq || 1),
         stock: Number(edit.stock || 0),
+        images: (edit.images || []).filter(Boolean),
+        specs: edit.specs || {},
+        featured: edit.featured,
+        active: edit.active,
+        tags: edit.tags || [],
         price_tiers: (edit.price_tiers || [])
           .filter(t => t.min_qty && t.price)
           .map(t => ({ min_qty: Number(t.min_qty), price: Number(t.price) })),
@@ -73,7 +89,7 @@ export default function AdminProducts() {
       if (edit.id) { await api.put(`/products/${edit.id}`, payload); toast.success('Product updated'); }
       else { await api.post('/products', payload); toast.success('Product created'); }
       setEdit(null); await load();
-    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+    } catch (e) { toast.error(errorMessage(e, 'Save failed')); }
     finally { setSaving(false); }
   };
 
