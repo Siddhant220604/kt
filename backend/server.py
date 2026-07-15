@@ -2969,6 +2969,17 @@ async def send_order_whatsapp_message(
 
 # ------------------ ADMIN STATS ------------------
 
+@api_router.get('/admin/notifications')
+async def admin_notifications(_: Dict = Depends(require_staff)):
+    """Lightweight counts for the sidebar's notification badges - kept on require_staff (not
+    require_admin) since pending_returns is core to what a staff account handles; the other two
+    counts are harmless to expose even though staff's nav hides Questions/Products (so those
+    badges just never render for them)."""
+    pending_returns = await db.orders.count_documents({'return_request.status': 'requested'})
+    pending_questions = await db.questions.count_documents({'answered': False})
+    low_stock = await db.products.count_documents({'stock': {'$lt': 10}, 'active': True})
+    return {'pending_returns': pending_returns, 'pending_questions': pending_questions, 'low_stock': low_stock}
+
 @api_router.get('/admin/stats')
 async def admin_stats(_: Dict = Depends(require_admin)):
     total_orders = await db.orders.count_documents({})

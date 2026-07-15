@@ -4,22 +4,23 @@ import { LayoutDashboard, Package, Tags, ShoppingBag, Users, Ticket, Image as Im
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
 import { useTheme } from '../lib/theme';
-import { logoutAdmin, isTokenExpired, isAdminOwner } from '../lib/api';
+import { api, logoutAdmin, isTokenExpired, isAdminOwner } from '../lib/api';
 
 // `staffAllowed: true` marks the handful of pages a restricted 'staff' account can reach
 // (order fulfillment + their own profile) - everything else is full-admin only, matching the
-// backend's require_staff vs require_admin split.
+// backend's require_staff vs require_admin split. `notifKey` maps a nav item to the matching
+// count from GET /admin/notifications, shown as a badge next to the label.
 const navItems = [
   { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard, staffAllowed: false },
   { to: '/admin/analytics', label: 'Analytics', icon: BarChart3, staffAllowed: false },
-  { to: '/admin/orders', label: 'Orders', icon: ShoppingBag, staffAllowed: true },
-  { to: '/admin/products', label: 'Products', icon: Package, staffAllowed: false },
+  { to: '/admin/orders', label: 'Orders', icon: ShoppingBag, staffAllowed: true, notifKey: 'pending_returns' },
+  { to: '/admin/products', label: 'Products', icon: Package, staffAllowed: false, notifKey: 'low_stock' },
   { to: '/admin/categories', label: 'Categories', icon: Tags, staffAllowed: false },
   { to: '/admin/customers', label: 'Customers', icon: Users, staffAllowed: true },
   { to: '/admin/coupons', label: 'Coupons', icon: Ticket, staffAllowed: false },
   { to: '/admin/banners', label: 'Banners', icon: ImageIcon, staffAllowed: false },
   { to: '/admin/reviews', label: 'Reviews', icon: Star, staffAllowed: false },
-  { to: '/admin/questions', label: 'Questions', icon: HelpCircle, staffAllowed: false },
+  { to: '/admin/questions', label: 'Questions', icon: HelpCircle, staffAllowed: false, notifKey: 'pending_questions' },
   { to: '/admin/contacts', label: 'Contacts', icon: Mail, staffAllowed: false },
   { to: '/admin/audit-log', label: 'Audit Log', icon: ScrollText, staffAllowed: false },
   { to: '/admin/users', label: 'Staff Accounts', icon: UserCog, staffAllowed: false },
@@ -27,7 +28,7 @@ const navItems = [
   { to: '/admin/settings', label: 'Settings', icon: SettingsIcon, staffAllowed: false },
 ];
 
-const SidebarContent = ({ onNav }) => {
+const SidebarContent = ({ onNav, notifs }) => {
   const { pathname } = useLocation();
   const owner = isAdminOwner();
   const items = navItems.filter(i => owner || i.staffAllowed);
@@ -43,13 +44,19 @@ const SidebarContent = ({ onNav }) => {
         </Link>
       </div>
       <nav className="flex-1 p-3 space-y-0.5">
-        {items.map(({ to, label, icon: Icon }) => {
+        {items.map(({ to, label, icon: Icon, notifKey }) => {
           const active = pathname.startsWith(to);
+          const count = notifKey ? (notifs?.[notifKey] || 0) : 0;
           return (
             <Link key={to} to={to} onClick={onNav} data-testid={`admin-nav-${label.toLowerCase()}`}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${active ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>
               <Icon className="h-4 w-4" />
-              <span>{label}</span>
+              <span className="flex-1">{label}</span>
+              {count > 0 && (
+                <span className={`text-[11px] font-semibold rounded-full min-w-[1.25rem] h-5 px-1.5 grid place-items-center ${active ? 'bg-primary-foreground/20' : 'bg-destructive text-destructive-foreground'}`} data-testid={`admin-nav-badge-${label.toLowerCase()}`}>
+                  {count > 99 ? '99+' : count}
+                </span>
+              )}
             </Link>
           );
         })}
@@ -66,8 +73,16 @@ const SidebarContent = ({ onNav }) => {
 const AdminLayout = () => {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [notifs, setNotifs] = useState(null);
   const { theme, toggle } = useTheme();
   const timeoutRef = useRef(null);
+
+  useEffect(() => {
+    const load = () => api.get('/admin/notifications').then(r => setNotifs(r.data)).catch(() => {});
+    load();
+    const interval = window.setInterval(load, 60000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const logout = () => {
     localStorage.removeItem('kt_admin_token');
@@ -108,7 +123,7 @@ const AdminLayout = () => {
   return (
     <div className="min-h-screen flex bg-muted/30">
       <aside className="hidden lg:flex w-64 border-r border-border bg-card flex-col">
-        <SidebarContent />
+        <SidebarContent notifs={notifs} />
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-14 border-b border-border bg-card px-4 flex items-center gap-3">
@@ -119,7 +134,7 @@ const AdminLayout = () => {
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-64 p-0">
-              <SidebarContent onNav={() => setOpen(false)} />
+              <SidebarContent onNav={() => setOpen(false)} notifs={notifs} />
             </SheetContent>
           </Sheet>
           <div className="ml-auto flex items-center gap-2">
