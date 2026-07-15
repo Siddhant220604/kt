@@ -784,9 +784,20 @@ async def logout_all_admin_devices(request: Request, payload: Dict = Depends(req
 # Full-admin only (require_admin, not require_staff) - a staff account must never be able to
 # create/promote/delete admin-panel accounts, including its own.
 
+def _is_root_admin_email(email: str) -> bool:
+    """The account provisioned from ADMIN_EMAIL/ADMIN_PASSWORD at startup (server.py's
+    seed_db) - permanently protected from deletion so the store can never end up with zero
+    admin accounts, regardless of how many other admin accounts exist or get deleted."""
+    root_email = (os.environ.get('ADMIN_EMAIL') or '').strip().lower()
+    return bool(root_email) and email.lower() == root_email
+
+
 @api_router.get('/admin/users')
 async def list_admin_users(_: Dict = Depends(require_admin)):
-    return await db.users.find({}, {'_id': 0, 'password_hash': 0, 'token_version': 0}).sort('created_at', -1).to_list(500)
+    users = await db.users.find({}, {'_id': 0, 'password_hash': 0, 'token_version': 0}).sort('created_at', -1).to_list(500)
+    for u in users:
+        u['is_root'] = _is_root_admin_email(u.get('email', ''))
+    return users
 
 @api_router.post('/admin/users')
 async def create_admin_user(u: AdminUserIn, request: Request, payload: Dict = Depends(require_admin)):
@@ -846,6 +857,8 @@ async def delete_admin_user(uid: str, request: Request, payload: Dict = Depends(
     target = await db.users.find_one({'id': uid})
     if not target:
         raise HTTPException(status_code=404, detail='User not found')
+    if _is_root_admin_email(target.get('email', '')):
+        raise HTTPException(status_code=400, detail='This is the protected root admin account and cannot be deleted')
     if target.get('role') == 'admin' and await db.users.count_documents({'role': 'admin'}) <= 1:
         raise HTTPException(status_code=400, detail='Cannot delete the last remaining admin account')
     await db.users.delete_one({'id': uid})

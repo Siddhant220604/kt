@@ -77,8 +77,8 @@ export default function AdminUsers() {
                   <tr key={u.id} className="border-t border-border">
                     <td className="px-4 py-2.5 font-medium">{u.name}</td>
                     <td className="py-2.5">{u.email}</td>
-                    <td className="py-2.5"><Badge variant="outline" className="capitalize">{u.role}</Badge></td>
-                    <td className="py-2.5"><div className="flex gap-1">{u.role === 'staff' && <Button size="icon" variant="ghost" onClick={() => startEdit(u)} data-testid={`admin-user-edit-${u.id}`}><Edit className="h-4 w-4" /></Button>}<Button size="icon" variant="ghost" onClick={() => del(u)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button></div></td>
+                    <td className="py-2.5"><Badge variant="outline" className="capitalize">{u.role}</Badge>{u.is_root && <Badge variant="outline" className="ml-1 bg-amber-500/10 text-amber-700 border-amber-500/20">Protected</Badge>}</td>
+                    <td className="py-2.5"><div className="flex gap-1">{u.role === 'staff' && <Button size="icon" variant="ghost" onClick={() => startEdit(u)} data-testid={`admin-user-edit-${u.id}`}><Edit className="h-4 w-4" /></Button>}{!u.is_root && <Button size="icon" variant="ghost" onClick={() => del(u)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button>}</div></td>
                   </tr>
                 ))}
               {!loading && rows.length === 0 && <tr><td colSpan={4} className="text-center py-8 text-muted-foreground text-sm">No accounts</td></tr>}
