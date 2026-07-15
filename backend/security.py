@@ -1,6 +1,8 @@
+import ipaddress
+import os
 import re
 from html import escape
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -36,12 +38,43 @@ def csv_safe(value: Any) -> Any:
     return value
 
 
+_trusted_proxy_networks_cache: Optional[List] = None
+
+
+def _trusted_proxy_networks() -> List:
+    global _trusted_proxy_networks_cache
+    if _trusted_proxy_networks_cache is None:
+        raw = os.environ.get('TRUSTED_PROXY_IPS', '127.0.0.1,::1')
+        networks = []
+        for part in raw.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                networks.append(ipaddress.ip_network(part, strict=False))
+            except ValueError:
+                pass
+        _trusted_proxy_networks_cache = networks
+    return _trusted_proxy_networks_cache
+
+
 def get_client_ip(request: Request) -> str:
+    """Returns the caller's real IP, used to key rate limiting and audit logs - so this must not
+    be spoofable. Only trusts the X-Forwarded-For header when the immediate TCP peer
+    (request.client.host) is itself a configured reverse proxy (TRUSTED_PROXY_IPS env var,
+    comma-separated IPs/CIDRs, defaults to loopback only). Without this check, a client that can
+    reach the app directly (e.g. a port left open behind a reverse proxy setup) could set
+    X-Forwarded-For to any value and bypass IP-based rate limiting entirely."""
+    client_host = request.client.host if request.client else None
     forwarded = request.headers.get('x-forwarded-for')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
-    client_host = request.client.host if request.client else 'unknown'
-    return client_host
+    if forwarded and client_host:
+        try:
+            peer = ipaddress.ip_address(client_host)
+            if any(peer in net for net in _trusted_proxy_networks()):
+                return forwarded.split(',')[0].strip()
+        except ValueError:
+            pass
+    return client_host or 'unknown'
 
 
 class SecureHeadersMiddleware(BaseHTTPMiddleware):
