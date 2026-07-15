@@ -139,7 +139,15 @@ export default function OrderTracking() {
                   </div>
                 ))}
                 <div className="border-t border-border pt-2 flex justify-between"><span>Subtotal</span><span>{formatINR(order.subtotal)}</span></div>
-                {order.discount > 0 && <div className="flex justify-between text-emerald-600"><span>Discount</span><span>-{formatINR(order.discount)}</span></div>}
+                {order.discount > 0 && <div className="flex justify-between text-emerald-600"><span>Discount{order.coupon_code ? ` (${order.coupon_code})` : ''}</span><span>-{formatINR(order.discount)}</span></div>}
+                {order.is_interstate ? (
+                  order.tax > 0 && <div className="flex justify-between"><span>IGST ({order.tax_rate}%)</span><span>{formatINR(order.tax)}</span></div>
+                ) : (
+                  <>
+                    {order.cgst_rate > 0 && <div className="flex justify-between"><span>CGST ({order.cgst_rate}%)</span><span>{formatINR(Math.round(Math.max(0, order.subtotal - (order.discount || 0)) * order.cgst_rate) / 100)}</span></div>}
+                    {order.sgst_rate > 0 && <div className="flex justify-between"><span>SGST ({order.sgst_rate}%)</span><span>{formatINR(Math.round(Math.max(0, order.subtotal - (order.discount || 0)) * order.sgst_rate) / 100)}</span></div>}
+                  </>
+                )}
                 {order.shipping > 0 && <div className="flex justify-between"><span>Shipping</span><span>{formatINR(order.shipping)}</span></div>}
                 <div className="flex justify-between font-display font-bold text-lg pt-1"><span>Total</span><span>{formatINR(order.total)}</span></div>
               </div>

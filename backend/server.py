@@ -2656,11 +2656,11 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
         d_rs, d_p = rp(discount)
         total_rows.append([total_label(label), f"-{d_rs}", d_p])
     if cgst > 0:
-        total_rows.append([total_label(f'ADD : CGST @ {cgst_rate:g}%'), *rp(cgst)])
+        total_rows.append([total_label(f'CGST @ {cgst_rate:g}%'), *rp(cgst)])
     if sgst > 0:
-        total_rows.append([total_label(f'ADD : SGST @ {sgst_rate:g}%'), *rp(sgst)])
+        total_rows.append([total_label(f'SGST @ {sgst_rate:g}%'), *rp(sgst)])
     if igst > 0:
-        total_rows.append([total_label(f'ADD : IGST @ {tax_rate:g}%'), *rp(igst)])
+        total_rows.append([total_label(f'IGST @ {tax_rate:g}%'), *rp(igst)])
     if shipping > 0:
         total_rows.append([total_label('Other Charges'), *rp(shipping)])
     total_rows.append([total_label('TOTAL AMOUNT OF INVOICE', bold=True), *rp(grand_total)])
