@@ -3693,6 +3693,17 @@ async def on_start():
         await _create_index_safely(db.customers, 'email', unique=True)
         await _create_index_safely(db.customers, 'mobile', unique=True)
         await _create_index_safely(db.orders, 'customer_id')
+        # Added for the admin panel's status filter, sidebar notification-count polling (every
+        # 60s, on every admin page), and the Analytics date-range queries - without these,
+        # each of those was a full collection scan, which gets slower as orders/questions grow
+        # and can noticeably drag down the whole admin panel on a shared/free-tier DB.
+        await _create_index_safely(db.orders, 'status')
+        await _create_index_safely(db.orders, [('created_at', -1)])
+        await _create_index_safely(db.orders, 'return_request.status')
+        await _create_index_safely(db.questions, 'answered')
+        await _create_index_safely(db.questions, 'product_id')
+        await _create_index_safely(db.products, [('active', 1), ('stock', 1)])
+        await _create_index_safely(db.reviews, 'product_id')
         start_abandoned_cart_watcher()
         logger.info('Startup complete')
     except Exception:
