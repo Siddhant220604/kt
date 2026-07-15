@@ -19,11 +19,13 @@ DEFAULT_TEMPLATE_LANGUAGE_CODE = 'en'
 # error #132000 if the count sent doesn't match the approved template) - it never changes what
 # gets sent. Update this when a template's approved body variables change.
 WHATSAPP_TEMPLATE_PARAM_COUNTS: Dict[str, int] = {
+    'order_pending': 3,
     'order_confirmation': 3,
     'order_packed': 2,
     'order_out_for_dilivery': 2,
     'order_delivered': 2,
-    'invoice_ready': 2,
+    'order_cancelled': 3,
+    'invoice_ready': 3,
     'review_request': 2,
 }
 

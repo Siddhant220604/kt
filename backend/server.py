@@ -1028,9 +1028,11 @@ async def verify_razorpay_payment(req: PaymentVerifyRequest, request: Request, b
     }})
     updated = await db.orders.find_one({'id': req.order_id}, {'_id': 0})
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
-    background_tasks.add_task(send_order_notification, updated, settings)
-    # Feature 2: order is now confirmed via online payment - validate/deliver the invoice link
-    background_tasks.add_task(send_invoice_whatsapp_task, req.order_id, settings, str(request.base_url))
+    # Online payment success transitions the order straight to 'confirmed' (the order_pending
+    # notification already went out at order creation) - send order_confirmation, the same
+    # template/params an admin's manual "Confirmed" status change sends via
+    # send_order_status_update_whatsapp(). invoice_ready is sent later, on delivery, not here.
+    background_tasks.add_task(send_order_status_update_whatsapp, updated, 'confirmed', settings)
     return {'ok': True, 'order': updated}
 
 
@@ -1556,14 +1558,21 @@ async def update_order_status(oid: str, upd: OrderStatusUpdate, request: Request
     updated = await db.orders.find_one({'id': oid}, {'_id': 0})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'update_order_status', oid, {'status': upd.status})
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
-    # Feature 1: WhatsApp status-update notification (non-blocking)
-    background_tasks.add_task(send_order_status_update_whatsapp, updated, upd.status, settings)
-    # Feature 2: once an order is confirmed, generate/validate the invoice and WhatsApp the link
-    if upd.status == 'confirmed':
-        background_tasks.add_task(send_invoice_whatsapp_task, oid, settings, str(request.base_url))
-    # Feature 3: once delivered, schedule a one-time review request ~24h later
-    if upd.status == 'delivered':
-        schedule_review_request(oid)
+    # Only notify on an actual status transition, so re-submitting the same status (e.g. a
+    # double click/retry in the admin UI) never sends a duplicate WhatsApp message.
+    status_changed = upd.status != old_status
+    if status_changed:
+        # Feature 1: WhatsApp status-update notification (non-blocking).
+        background_tasks.add_task(send_order_status_update_whatsapp, updated, upd.status, settings)
+        # Feature 2: once delivered, send order_delivered then, immediately after, invoice_ready
+        # with the invoice PDF attached. BackgroundTasks runs tasks sequentially in the order
+        # they're added, so queuing this after the line above guarantees order_delivered lands
+        # before invoice_ready.
+        if upd.status == 'delivered':
+            background_tasks.add_task(send_invoice_whatsapp_task, oid, settings, str(request.base_url))
+        # Feature 3: once delivered, schedule a one-time review request ~24h later
+        if upd.status == 'delivered':
+            schedule_review_request(oid)
     return updated
 
 @api_router.post('/orders/{oid}/mark-refunded')
@@ -1749,28 +1758,39 @@ async def delete_review(rid: str, request: Request, payload: Dict = Depends(requ
 # which is send_template_message()'s default language_code. Body parameters, in order, per
 # template (must exactly match the approved template's {{1}}, {{2}}, ... variable count, or
 # Meta's Cloud API rejects the send with error #132000):
-#   order_confirmation:       [customer_name, order_id, total_amount]
-#   order_packed:              [customer_name, order_id]
-#   order_out_for_dilivery:    [customer_name, order_id]
-#   order_delivered:           [customer_name, order_id]
-#   invoice_ready:              [customer_name, order_id]
-#   review_request:            [customer_name, order_id]
+#   order_pending:              [customer_name, order_id, total_amount]
+#   order_confirmation:         [customer_name, order_id, total_amount]
+#   order_packed:               [customer_name, order_id]
+#   order_out_for_dilivery:     [customer_name, order_id]
+#   order_delivered:            [customer_name, order_id]
+#   order_cancelled:            [customer_name, order_id, total_amount]
+#   invoice_ready:              [customer_name, order_id, invoice_number]
+#   review_request:             [customer_name, order_id]
+WHATSAPP_TEMPLATE_ORDER_PENDING = 'order_pending'
 WHATSAPP_TEMPLATE_ORDER_CONFIRMATION = 'order_confirmation'
 WHATSAPP_TEMPLATE_ORDER_PACKED = 'order_packed'
 WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY = 'order_out_for_dilivery'
 WHATSAPP_TEMPLATE_ORDER_DELIVERED = 'order_delivered'
+WHATSAPP_TEMPLATE_ORDER_CANCELLED = 'order_cancelled'
 WHATSAPP_TEMPLATE_INVOICE_READY = 'invoice_ready'
 WHATSAPP_TEMPLATE_REVIEW_REQUEST = 'review_request'
 
-# Order statuses that have an approved lifecycle template. Statuses without one (e.g. 'cancelled',
-# 'pending', 'processing') keep using the free-form text fallback in build_status_update_message()/
+# Order statuses that have an approved lifecycle template, used by send_order_status_update_whatsapp()
+# below. 'pending' is deliberately absent here - that notification is sent once, directly from order
+# creation (see send_order_whatsapp()), not from a status transition. Statuses without an approved
+# template (e.g. 'processing') keep using the free-form text fallback in build_status_update_message()/
 # STATUS_WHATSAPP_TEMPLATES below, unchanged from before this migration.
 STATUS_TO_WHATSAPP_TEMPLATE = {
     'confirmed': WHATSAPP_TEMPLATE_ORDER_CONFIRMATION,
     'packed': WHATSAPP_TEMPLATE_ORDER_PACKED,
     'out for delivery': WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY,
     'delivered': WHATSAPP_TEMPLATE_ORDER_DELIVERED,
+    'cancelled': WHATSAPP_TEMPLATE_ORDER_CANCELLED,
 }
+
+# Templates whose body includes the order total as its 3rd parameter (in addition to the standard
+# [customer_name, order_id] every lifecycle template starts with).
+WHATSAPP_TEMPLATES_WITH_TOTAL_AMOUNT = {WHATSAPP_TEMPLATE_ORDER_CONFIRMATION, WHATSAPP_TEMPLATE_ORDER_CANCELLED}
 
 
 def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
@@ -1795,15 +1815,17 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
         return
 
     try:
-        # Order placement/receipt notification -> the order_confirmation approved template.
+        # Order placement/receipt notification -> the order_pending approved template. The order
+        # is only confirmed later by an admin (see send_order_status_update_whatsapp(), triggered
+        # from the 'confirmed' status transition), which sends order_confirmation instead.
         # Body variables: {{1}} customer name, {{2}} order id, {{3}} total amount.
         result = send_template_message(
             phone,
-            WHATSAPP_TEMPLATE_ORDER_CONFIRMATION,
+            WHATSAPP_TEMPLATE_ORDER_PENDING,
             body_parameters=[customer_name, order_id, total_amount],
             config=config,
         )
-        record_whatsapp_message_sent(result, template=WHATSAPP_TEMPLATE_ORDER_CONFIRMATION, order_id=order_id)
+        record_whatsapp_message_sent(result, template=WHATSAPP_TEMPLATE_ORDER_PENDING, order_id=order_id)
     except Exception:
         logger.exception('Failed to send WhatsApp order notification for order %s', order_id)
 
@@ -1850,11 +1872,12 @@ def send_order_status_update_whatsapp(order: Dict[str, Any], status: str, settin
     template_name = STATUS_TO_WHATSAPP_TEMPLATE.get(status)
     try:
         if template_name:
-            # Approved Utility Template for the four lifecycle stages Meta has templates for.
-            # order_confirmation expects a 3rd body variable (total amount); the other three
-            # mapped statuses (packed/out for delivery/delivered) are still 2-parameter templates.
+            # Approved Utility Template for the five status-transition lifecycle stages Meta has
+            # templates for. order_confirmation/order_cancelled expect a 3rd body variable (total
+            # amount); the other mapped statuses (packed/out for delivery/delivered) are still
+            # 2-parameter templates.
             body_parameters = [customer_name, order_id]
-            if template_name == WHATSAPP_TEMPLATE_ORDER_CONFIRMATION:
+            if template_name in WHATSAPP_TEMPLATES_WITH_TOTAL_AMOUNT:
                 body_parameters.append(f"{order.get('total', 0):.2f}")
             result = send_template_message(
                 phone,
@@ -1920,9 +1943,11 @@ async def maybe_send_low_stock_alert(product_id: str, settings: Optional[Dict[st
 # ------------------ FEATURE 2: PDF INVOICE + WHATSAPP ------------------
 
 async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str, Any]] = None, base_url: str = '') -> None:
-    """Background task: validate the invoice can be generated, then WhatsApp a link to it.
-    Runs after the response has been sent; never raises (all failures are logged and swallowed)
-    so it can never affect the order-confirmation flow it's attached to."""
+    """Background task: validate the invoice can be generated, then WhatsApp it (invoice_ready,
+    PDF attached) to the customer. Triggered once an order is marked 'delivered', immediately
+    after the order_delivered notification. Runs after the response has been sent; never raises
+    (all failures are logged and swallowed) so it can never affect the order-status flow it's
+    attached to."""
     try:
         order = await db.orders.find_one({'id': order_id}, {'_id': 0})
         if not order:
@@ -1962,6 +1987,9 @@ async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str,
             base = 'https://' + base[len('http://'):]
         invoice_url = f"{base}/api/orders/{order_id}/invoice?mobile={mobile}"
         customer_name = address.get('name') or 'Customer'
+        # Same invoice-number assignment used by the /orders/{oid}/invoice endpoint itself, so the
+        # number quoted in the WhatsApp message always matches the PDF Meta fetches from invoice_url.
+        invoice_number = await get_or_assign_invoice_number(order)
 
         config = get_whatsapp_config()
         if not config.is_valid:
@@ -1969,13 +1997,14 @@ async def send_invoice_whatsapp_task(order_id: str, settings: Optional[Dict[str,
             return
 
         # invoice_ready template: document header (the invoice PDF link) + body params
-        # [customer_name, order_id]. invoice_url is a publicly-fetchable link (Meta's servers
-        # need to be able to download it) to the same on-demand PDF endpoint used everywhere else.
+        # [customer_name, order_id, invoice_number]. invoice_url is a publicly-fetchable link
+        # (Meta's servers need to be able to download it) to the same on-demand PDF endpoint used
+        # everywhere else, so the attached document is exactly the backend-generated invoice.
         result = await asyncio.to_thread(
             send_template_message,
             phone,
             WHATSAPP_TEMPLATE_INVOICE_READY,
-            [customer_name, order_id],
+            [customer_name, order_id, invoice_number],
             {'link': invoice_url, 'filename': f'Invoice-{order_id}.pdf'},
             config,
         )
