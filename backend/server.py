@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request, UploadFile, File
 from fastapi.responses import Response, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -875,6 +875,41 @@ async def list_products(
     docs = await db.products.find(q, {'_id': 0}).sort(sort_by).skip(skip).limit(limit).to_list(limit)
     return {'items': docs, 'total': total, 'page': page, 'limit': limit, 'pages': max(1, (total + limit - 1) // limit)}
 
+PRODUCT_CSV_COLUMNS = ['id', 'name', 'category', 'description', 'short_description', 'size', 'unit', 'price', 'compare_price', 'moq', 'stock', 'images', 'tags', 'featured', 'active']
+MAX_IMPORT_ROWS = 2000
+
+# Registered ahead of the /products/{pid} route below - both are literal path segments, not
+# ids, and FastAPI matches routes in registration order, so {pid} would otherwise swallow
+# "export"/"import" as if they were product ids.
+@api_router.get('/products/export')
+async def export_products(_: Dict = Depends(require_admin)):
+    docs = await db.products.find({}, {'_id': 0}).sort('created_at', -1).to_list(10000)
+    cats = {c['id']: c['name'] for c in await db.categories.find({}, {'_id': 0}).to_list(1000)}
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(PRODUCT_CSV_COLUMNS)
+    for d in docs:
+        writer.writerow([security.csv_safe(v) for v in [
+            d.get('id', ''), d.get('name', ''), cats.get(d.get('category_id'), ''),
+            d.get('description', ''), d.get('short_description', ''), d.get('size', ''), d.get('unit', ''),
+            d.get('price', 0), d.get('compare_price', 0), d.get('moq', 1), d.get('stock', 0),
+            ';'.join(d.get('images') or []), ';'.join(d.get('tags') or []),
+            d.get('featured', False), d.get('active', True),
+        ]])
+    return Response(content=buf.getvalue(), media_type='text/csv', headers={
+        'Content-Disposition': f'attachment; filename=products-{datetime.now(timezone.utc).strftime("%Y%m%d")}.csv'
+    })
+
+@api_router.get('/products/import/template')
+async def product_import_template(_: Dict = Depends(require_admin)):
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(PRODUCT_CSV_COLUMNS)
+    writer.writerow(['', 'Sample Product', 'Packaging', 'Full description here', 'Short blurb', '500g', 'piece', '99', '129', '1', '100', 'https://example.com/img1.jpg;https://example.com/img2.jpg', 'eco;bulk', 'false', 'true'])
+    return Response(content=buf.getvalue(), media_type='text/csv', headers={
+        'Content-Disposition': 'attachment; filename=products-import-template.csv'
+    })
+
 @api_router.get('/products/{pid}')
 async def get_product(pid: str):
     p = await db.products.find_one({'id': pid}, {'_id': 0}) or await db.products.find_one({'slug': pid}, {'_id': 0})
@@ -922,6 +957,79 @@ async def delete_product(pid: str, request: Request, payload: Dict = Depends(req
     cache_invalidate('categories')
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'delete_product', pid)
     return {'ok': True}
+
+@api_router.post('/products/import')
+async def import_products(request: Request, payload: Dict = Depends(require_admin), file: UploadFile = File(...)):
+    # Leave `id` blank to create a new product; fill it in (e.g. from a prior /products/export)
+    # to update that existing product instead - lets admin bulk-edit a large catalog by
+    # exporting, editing in a spreadsheet, and re-uploading, not just bulk-create.
+    if not (file.filename or '').lower().endswith('.csv'):
+        raise HTTPException(status_code=400, detail='Please upload a .csv file')
+    raw = await file.read()
+    if len(raw) > 5_000_000:
+        raise HTTPException(status_code=400, detail='CSV file is too large (max 5MB)')
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail='CSV must be UTF-8 encoded')
+    rows = list(csv.DictReader(io.StringIO(text)))
+    if len(rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(status_code=400, detail=f'CSV has too many rows (max {MAX_IMPORT_ROWS})')
+
+    cat_by_name = {c['name'].strip().lower(): c['id'] for c in await db.categories.find({}, {'_id': 0}).to_list(1000)}
+
+    created = 0
+    updated = 0
+    errors: List[Dict] = []
+    for i, row in enumerate(rows, start=2):  # row 1 is the header
+        try:
+            category_name = (row.get('category') or '').strip()
+            category_id = cat_by_name.get(category_name.lower())
+            if not category_id:
+                raise ValueError(f'Unknown category "{category_name}"')
+            pr = ProductIn(
+                name=(row.get('name') or '').strip(),
+                category_id=category_id,
+                description=row.get('description') or '',
+                short_description=row.get('short_description') or '',
+                size=row.get('size') or '',
+                unit=row.get('unit') or 'piece',
+                price=float(row.get('price') or 0),
+                compare_price=float(row.get('compare_price') or 0),
+                moq=int(float(row.get('moq') or 1)),
+                stock=int(float(row.get('stock') or 0)),
+                images=[u.strip() for u in (row.get('images') or '').split(';') if u.strip()],
+                tags=[t.strip() for t in (row.get('tags') or '').split(';') if t.strip()],
+                featured=str(row.get('featured', '')).strip().lower() in ('true', '1', 'yes'),
+                active=str(row.get('active', 'true')).strip().lower() in ('true', '1', 'yes', ''),
+            )
+        except Exception as e:
+            errors.append({'row': i, 'message': str(e)})
+            continue
+
+        existing_id = (row.get('id') or '').strip()
+        doc = pr.model_dump()
+        if existing_id:
+            existing = await db.products.find_one({'id': existing_id}, {'_id': 0})
+            if not existing:
+                errors.append({'row': i, 'message': f'Product id "{existing_id}" not found'})
+                continue
+            doc['slug'] = await unique_slug(db.products, doc.get('slug') or slugify(pr.name), exclude_id=existing_id)
+            doc['updated_at'] = now_iso()
+            await db.products.update_one({'id': existing_id}, {'$set': doc})
+            updated += 1
+        else:
+            doc['id'] = str(uuid.uuid4())
+            doc['slug'] = await unique_slug(db.products, doc.get('slug') or slugify(pr.name))
+            doc['created_at'] = now_iso()
+            doc['avg_rating'] = 0.0
+            doc['review_count'] = 0
+            await db.products.insert_one(doc)
+            created += 1
+
+    cache_invalidate('categories')
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'import_products', '-', {'created': created, 'updated': updated, 'errors': len(errors)})
+    return {'created': created, 'updated': updated, 'errors': errors}
 
 # ------------------ COUPONS ------------------
 

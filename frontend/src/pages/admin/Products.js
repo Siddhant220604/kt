@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, formatINR } from '../../lib/api';
+import { api, formatINR, downloadFile } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from '../../components/ui/badge';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from '../../components/ui/dialog';
-import { Plus, Edit, Trash2, X, Image as ImageIcon, Search } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import { toast } from 'sonner';
 
 const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [], price_tiers: [] };
@@ -24,6 +24,8 @@ export default function AdminProducts() {
   const [q, setQ] = useState('');
   const [saving, setSaving] = useState(false);
   const [sp, setSp] = useSearchParams();
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,6 +76,27 @@ export default function AdminProducts() {
 
   const del = async (p) => { if (!window.confirm(`Delete "${p.name}"?`)) return; await api.delete(`/products/${p.id}`); toast.success('Deleted'); load(); };
 
+  const exportCsv = () => downloadFile('/products/export', {}, `products-${new Date().toISOString().slice(0, 10)}.csv`).catch(() => toast.error('Export failed'));
+  const downloadTemplate = () => downloadFile('/products/import/template', {}, 'products-import-template.csv').catch(() => toast.error('Download failed'));
+
+  const importCsv = async (file) => {
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    setImporting(true);
+    try {
+      const { data } = await api.post('/products/import', form);
+      setImportResult(data);
+      if (data.created || data.updated) toast.success(`Imported: ${data.created} created, ${data.updated} updated`);
+      if (data.errors?.length) toast.error(`${data.errors.length} row(s) had errors - see details`);
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Import failed');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const addTier = () => setEdit(e => ({ ...e, price_tiers: [...(e.price_tiers || []), { min_qty: '', price: '' }] }));
   const setTier = (i, field, v) => setEdit(e => ({ ...e, price_tiers: e.price_tiers.map((t, idx) => idx === i ? { ...t, [field]: v } : t) }));
   const rmTier = (i) => setEdit(e => ({ ...e, price_tiers: e.price_tiers.filter((_, idx) => idx !== i) }));
@@ -100,9 +123,29 @@ export default function AdminProducts() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products" className="pl-9 w-60" />
           </form>
+          <Button variant="outline" onClick={downloadTemplate} className="gap-1" title="Download a blank CSV to fill in"><FileSpreadsheet className="h-4 w-4" />Template</Button>
+          <Button variant="outline" onClick={exportCsv} className="gap-1" data-testid="admin-export-products"><Download className="h-4 w-4" />Export CSV</Button>
+          <label className="cursor-pointer">
+            <input type="file" accept=".csv" className="hidden" onChange={(e) => { importCsv(e.target.files[0]); e.target.value = ''; }} data-testid="admin-import-products-input" />
+            <Button asChild variant="outline" className="gap-1" disabled={importing}><span><Upload className="h-4 w-4" />{importing ? 'Importing...' : 'Import CSV'}</span></Button>
+          </label>
           <Button onClick={openNew} className="gap-1" data-testid="admin-new-product"><Plus className="h-4 w-4" />New Product</Button>
         </div>
       </div>
+
+      {importResult && (
+        <div className="bg-card border border-border rounded-2xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="font-display font-semibold text-sm">Import Result: {importResult.created} created, {importResult.updated} updated{importResult.errors?.length ? `, ${importResult.errors.length} error(s)` : ''}</div>
+            <Button size="sm" variant="ghost" onClick={() => setImportResult(null)}><X className="h-4 w-4" /></Button>
+          </div>
+          {importResult.errors?.length > 0 && (
+            <div className="space-y-1 max-h-40 overflow-auto text-xs text-destructive">
+              {importResult.errors.map((e, i) => <div key={i}>Row {e.row}: {e.message}</div>)}
+            </div>
+          )}
+        </div>
+      )}
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
