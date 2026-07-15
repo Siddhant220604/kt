@@ -6,6 +6,10 @@ WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '')
 WHATSAPP_VERIFY_TOKEN = os.environ.get('WHATSAPP_VERIFY_TOKEN', '')
 WHATSAPP_API_VERSION = os.environ.get('WHATSAPP_API_VERSION', 'v23.0')
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '+91')
+# Meta's WhatsApp Business App secret (Meta App Dashboard -> Settings -> Basic), used to verify
+# the X-Hub-Signature-256 header on incoming webhook POSTs. Optional so existing deployments
+# that haven't set it yet keep working, but the webhook handler logs a warning until it is.
+WHATSAPP_APP_SECRET = os.environ.get('WHATSAPP_APP_SECRET', '')
 
 @dataclass
 class WhatsAppConfig:
@@ -14,6 +18,7 @@ class WhatsAppConfig:
     verify_token: str
     api_version: str = 'v23.0'
     default_country_code: str = '+91'
+    app_secret: str = ''
 
     @property
     def is_valid(self) -> bool:
@@ -31,4 +36,5 @@ def get_whatsapp_config() -> WhatsAppConfig:
         verify_token=WHATSAPP_VERIFY_TOKEN,
         api_version=WHATSAPP_API_VERSION,
         default_country_code=WHATSAPP_DEFAULT_COUNTRY_CODE,
+        app_secret=WHATSAPP_APP_SECRET,
     )

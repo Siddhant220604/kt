@@ -912,7 +912,10 @@ async def delete_coupon(cid: str, request: Request, payload: Dict = Depends(requ
     return {'ok': True}
 
 @api_router.post('/coupons/validate')
-async def validate_coupon(req: CouponValidate):
+async def validate_coupon(req: CouponValidate, request: Request):
+    # Public tier limit - otherwise this is an unauthenticated oracle for brute-forcing valid
+    # discount codes (each guess is free and confirms/denies a code in one round trip).
+    dependencies.check_rate_limit(request, 'coupon_validate', *rate_limits.get_bucket_limit('coupon_validate', 20, 15 * 60))
     code = req.code.strip().upper()
     c = await db.coupons.find_one({'code': code, 'active': True}, {'_id': 0})
     if not c:
@@ -942,7 +945,8 @@ async def validate_coupon(req: CouponValidate):
 # ------------------ PAYMENTS ------------------
 
 @api_router.post('/payment/create-order')
-async def create_razorpay_order(req: PaymentCreateOrderRequest):
+async def create_razorpay_order(req: PaymentCreateOrderRequest, request: Request):
+    dependencies.check_rate_limit(request, 'payment_create_order', *rate_limits.get_bucket_limit('payment_create_order', 20, 15 * 60))
     if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=400, detail='Razorpay is not configured yet. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to the backend environment.')
 
@@ -995,6 +999,10 @@ async def create_razorpay_order(req: PaymentCreateOrderRequest):
 
 @api_router.post('/payment/verify')
 async def verify_razorpay_payment(req: PaymentVerifyRequest, request: Request, background_tasks: BackgroundTasks):
+    # Auth-style limit with backoff, keyed by order_id - each call is effectively a guess at a
+    # valid (payment_id, signature) pair for that order, so repeated failures should slow down
+    # the same way a wrong-password attempt does.
+    dependencies.check_auth_rate_limit(request, 'payment_verify', req.order_id)
     if not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=400, detail='Razorpay is not configured yet.')
 
@@ -1318,12 +1326,17 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
     return doc
 
 @api_router.post('/orders/track')
-async def track_order(req: TrackOrderRequest):
-    o = await db.orders.find_one({'id': req.order_id.strip().upper()}, {'_id': 0})
-    if not o:
+async def track_order(req: TrackOrderRequest, request: Request):
+    order_id = req.order_id.strip().upper()
+    # Treated like an auth check (order_id + mobile is effectively a credential pair) rather
+    # than a plain public read - without this, an attacker holding/guessing an order_id could
+    # otherwise brute-force mobile numbers to pull someone else's name/address off the order.
+    dependencies.check_auth_rate_limit(request, 'track_order', order_id)
+    o = await db.orders.find_one({'id': order_id}, {'_id': 0})
+    if not o or str(o['address'].get('mobile', '')).strip() != req.mobile.strip():
+        dependencies.record_auth_failure(request, 'track_order', order_id)
         raise HTTPException(status_code=404, detail='Order not found')
-    if str(o['address'].get('mobile', '')).strip() != req.mobile.strip():
-        raise HTTPException(status_code=403, detail='Mobile number does not match')
+    dependencies.clear_auth_attempts(request, 'track_order', order_id)
     return o
 
 # ------------------ CUSTOMER ACCOUNTS ------------------
@@ -1496,13 +1509,13 @@ async def export_orders(
     for o in docs:
         addr = o.get('address', {})
         items_summary = '; '.join(f"{it.get('name', '')} x{it.get('quantity', 0)}" for it in o.get('items', []))
-        writer.writerow([
+        writer.writerow([security.csv_safe(v) for v in [
             o.get('id', ''), o.get('created_at', '')[:10], o.get('status', ''),
             addr.get('name', ''), addr.get('mobile', ''), addr.get('email', ''),
             addr.get('city', ''), addr.get('state', ''), addr.get('pincode', ''),
             items_summary, o.get('subtotal', 0), o.get('discount', 0), o.get('tax', 0),
             o.get('shipping', 0), o.get('total', 0), o.get('payment_method', ''), o.get('payment_status', ''),
-        ])
+        ]])
     return Response(content=buf.getvalue(), media_type='text/csv', headers={
         'Content-Disposition': f'attachment; filename=orders-{datetime.now(timezone.utc).strftime("%Y%m%d")}.csv'
     })
@@ -1652,10 +1665,10 @@ async def export_customers(_: Dict = Depends(require_admin)):
     writer = csv.writer(buf)
     writer.writerow(['Name', 'Mobile', 'Email', 'City', 'Orders', 'Total Spent', 'Last Order'])
     for d in docs:
-        writer.writerow([
+        writer.writerow([security.csv_safe(v) for v in [
             d.get('name', ''), d.get('mobile', ''), d.get('email', ''), d.get('city', ''),
             d.get('orders', 0), d.get('spent', 0), (d.get('last_order') or '')[:10],
-        ])
+        ]])
     return Response(content=buf.getvalue(), media_type='text/csv', headers={
         'Content-Disposition': f'attachment; filename=customers-{datetime.now(timezone.utc).strftime("%Y%m%d")}.csv'
     })
@@ -2154,6 +2167,13 @@ async def verify_whatsapp_webhook(request: Request):
         return Response(content=challenge or '', media_type='text/plain')
     raise HTTPException(status_code=403, detail='Invalid verification token')
 
+def _verify_whatsapp_signature(raw_body: bytes, signature_header: str, app_secret: str) -> bool:
+    if not signature_header.startswith('sha256='):
+        return False
+    expected = hmac.new(app_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_header[len('sha256='):])
+
+
 @api_router.post('/webhooks/whatsapp')
 async def handle_whatsapp_webhook(payload: Dict[str, Any], request: Request):
     """Meta calls this for every delivery-status update (sent/delivered/read/failed) and every
@@ -2161,6 +2181,21 @@ async def handle_whatsapp_webhook(payload: Dict[str, Any], request: Request):
     the *only* source of ground truth for what actually happened to a message after Meta's
     "accepted" response to the initial send call. Each event is logged in full and, for status
     callbacks, correlated back to the wamid recorded at send time (record_whatsapp_message_sent)."""
+    dependencies.check_rate_limit(request, 'whatsapp_webhook', *rate_limits.get_bucket_limit('whatsapp_webhook', 120, 60))
+
+    config = get_whatsapp_config()
+    if config.app_secret:
+        signature = request.headers.get('x-hub-signature-256', '')
+        if not _verify_whatsapp_signature(await request.body(), signature, config.app_secret):
+            logger.warning('Rejected WhatsApp webhook POST with invalid/missing signature')
+            raise HTTPException(status_code=403, detail='Invalid signature')
+    else:
+        logger.warning(
+            'WHATSAPP_APP_SECRET is not set - webhook POSTs are accepted without verifying they '
+            'actually came from Meta. Set WHATSAPP_APP_SECRET (Meta App Dashboard > Settings > '
+            'Basic) to enable signature verification.'
+        )
+
     logger.info('WhatsApp webhook event received: %s', payload)
 
     for entry in payload.get('entry', []) or []:

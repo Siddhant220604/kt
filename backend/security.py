@@ -22,6 +22,20 @@ def sanitize_dict(value: Dict[str, Any]) -> Dict[str, Any]:
     return {k: sanitize_value(v) for k, v in value.items()}
 
 
+_CSV_FORMULA_LEAD_CHARS = ('=', '+', '-', '@', '\t', '\r')
+
+
+def csv_safe(value: Any) -> Any:
+    """Neutralizes CSV/formula injection: a cell starting with =, +, -, @ (or a tab/CR that can
+    push a formula char to the start once opened) is interpreted as a formula by Excel/Sheets,
+    not literal text - e.g. a customer entering "=HYPERLINK(...)" as their name could run
+    arbitrary formulas in whoever's spreadsheet later opens an admin CSV export. Prefixing with
+    a single quote forces it to display as literal text instead."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_LEAD_CHARS):
+        return "'" + value
+    return value
+
+
 def get_client_ip(request: Request) -> str:
     forwarded = request.headers.get('x-forwarded-for')
     if forwarded:
