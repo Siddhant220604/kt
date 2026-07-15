@@ -462,6 +462,21 @@ class OrderStatusUpdate(BaseModel):
     status: Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
     tracking_note: Optional[str] = Field('', max_length=1000)
 
+class ReturnItemIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    product_id: str = Field(min_length=1, max_length=100)
+    quantity: int = Field(gt=0, le=100000)
+
+class ReturnRequestIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    reason: str = Field(min_length=1, max_length=1000)
+    items: List[ReturnItemIn] = Field(min_length=1, max_length=200)
+
+class ReturnResolveIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    status: Literal['approved', 'rejected', 'refunded']
+    note: Optional[str] = Field('', max_length=1000)
+
 class TrackOrderRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     order_id: str = Field(min_length=1, max_length=50)
@@ -1766,6 +1781,76 @@ async def mark_order_refunded(oid: str, request: Request, payload: Dict = Depend
         raise HTTPException(status_code=400, detail='This order has no pending refund')
     await db.orders.update_one({'id': oid}, {'$set': {'refund_status': 'refunded', 'refunded_at': now_iso()}})
     await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'mark_order_refunded', oid)
+    return await db.orders.find_one({'id': oid}, {'_id': 0})
+
+RETURN_WINDOW_DAYS = 7
+
+
+@api_router.post('/customer/orders/{oid}/return')
+async def request_return(oid: str, req: ReturnRequestIn, request: Request, payload: Dict = Depends(dependencies.require_customer)):
+    dependencies.check_authenticated_rate_limit(request, 'return_request', payload['sub'])
+    o = await db.orders.find_one({'id': oid}, {'_id': 0})
+    if not o or o.get('customer_id') != payload['sub']:
+        raise HTTPException(status_code=404, detail='Order not found')
+    if o.get('status') != 'delivered':
+        raise HTTPException(status_code=400, detail='Only delivered orders can be returned')
+    existing = o.get('return_request')
+    if existing and existing.get('status') in ('requested', 'approved', 'refunded'):
+        raise HTTPException(status_code=400, detail='A return request already exists for this order')
+    delivered_at = next((h['at'] for h in reversed(o.get('status_history', [])) if h['status'] == 'delivered'), None)
+    if delivered_at:
+        try:
+            delivered_dt = datetime.fromisoformat(delivered_at.replace('Z', '+00:00'))
+            if delivered_dt.tzinfo is None:
+                delivered_dt = delivered_dt.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - delivered_dt).days > RETURN_WINDOW_DAYS:
+                raise HTTPException(status_code=400, detail=f'Return window of {RETURN_WINDOW_DAYS} days has passed')
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    order_items = {it['product_id']: it for it in o.get('items', [])}
+    return_items = []
+    for ri in req.items:
+        oi = order_items.get(ri.product_id)
+        if not oi:
+            raise HTTPException(status_code=400, detail=f'Item {ri.product_id} is not part of this order')
+        if ri.quantity > oi['quantity']:
+            raise HTTPException(status_code=400, detail=f'Cannot return more than the ordered quantity for {oi["name"]}')
+        return_items.append({'product_id': ri.product_id, 'name': oi['name'], 'quantity': ri.quantity})
+    return_request = {
+        'id': str(uuid.uuid4()),
+        'status': 'requested',
+        'reason': req.reason,
+        'items': return_items,
+        'requested_at': now_iso(),
+        'resolved_at': None,
+        'resolution_note': '',
+        'refunded_at': None,
+    }
+    await db.orders.update_one({'id': oid}, {'$set': {'return_request': return_request}})
+    return await db.orders.find_one({'id': oid}, {'_id': 0})
+
+
+@api_router.put('/orders/{oid}/return')
+async def resolve_return(oid: str, req: ReturnResolveIn, request: Request, payload: Dict = Depends(require_admin)):
+    o = await db.orders.find_one({'id': oid}, {'_id': 0})
+    if not o:
+        raise HTTPException(status_code=404, detail='Order not found')
+    rr = o.get('return_request')
+    if not rr:
+        raise HTTPException(status_code=400, detail='No return request on this order')
+    valid_transitions = {'requested': {'approved', 'rejected'}, 'approved': {'refunded'}}
+    if req.status not in valid_transitions.get(rr['status'], set()):
+        raise HTTPException(status_code=400, detail=f"Cannot move a return request from '{rr['status']}' to '{req.status}'")
+    rr['status'] = req.status
+    rr['resolution_note'] = req.note or rr.get('resolution_note', '')
+    if req.status in ('approved', 'rejected'):
+        rr['resolved_at'] = now_iso()
+    if req.status == 'refunded':
+        rr['refunded_at'] = now_iso()
+    await db.orders.update_one({'id': oid}, {'$set': {'return_request': rr}})
+    await audit.record_audit(db, payload.get('email', 'unknown'), security.get_client_ip(request), 'resolve_return', oid, {'status': req.status})
     return await db.orders.find_one({'id': oid}, {'_id': 0})
 
 @api_router.get('/orders/{oid}/invoice')

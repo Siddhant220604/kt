@@ -5,10 +5,14 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
-import { CheckCircle2, Circle, Truck, Package, Clock, MessageCircle, FileText, Search } from 'lucide-react';
-import { api, formatINR, API } from '../lib/api';
+import { Textarea } from '../components/ui/textarea';
+import { CheckCircle2, Circle, Truck, Package, Clock, MessageCircle, FileText, Search, RotateCcw } from 'lucide-react';
+import { api, formatINR, API, isCustomerLoggedIn } from '../lib/api';
 import { toast } from 'sonner';
 import { useSettings } from '../lib/settings';
+
+const returnStatusLabel = { requested: 'Return requested — awaiting review', approved: 'Return approved — refund in progress', rejected: 'Return request rejected', refunded: 'Refunded' };
+const returnStatusColor = { requested: 'bg-amber-500/10 text-amber-700 border-amber-500/20', approved: 'bg-sky-500/10 text-sky-700 border-sky-500/20', rejected: 'bg-red-500/10 text-red-700 border-red-500/20', refunded: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20' };
 
 const STEPS = [
   { key: 'pending', label: 'Order Placed', icon: Clock },
@@ -26,6 +30,10 @@ export default function OrderTracking() {
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(false);
   const { settings } = useSettings();
+  const [showReturnForm, setShowReturnForm] = useState(false);
+  const [returnReason, setReturnReason] = useState('');
+  const [returnQty, setReturnQty] = useState({});
+  const [submittingReturn, setSubmittingReturn] = useState(false);
 
   const doTrack = async (e) => {
     e && e.preventDefault();
@@ -52,6 +60,30 @@ export default function OrderTracking() {
     }
     // eslint-disable-next-line
   }, [paramOid]);
+
+  const startReturn = () => {
+    setReturnReason('');
+    setReturnQty(Object.fromEntries((order.items || []).map(it => [it.product_id, 0])));
+    setShowReturnForm(true);
+  };
+
+  const submitReturn = async (e) => {
+    e.preventDefault();
+    if (!returnReason.trim()) return toast.error('Tell us why you want to return this order');
+    const items = Object.entries(returnQty).filter(([, q]) => q > 0).map(([product_id, quantity]) => ({ product_id, quantity }));
+    if (!items.length) return toast.error('Select at least one item to return');
+    setSubmittingReturn(true);
+    try {
+      const { data } = await api.post(`/customer/orders/${order.id}/return`, { reason: returnReason.trim(), items });
+      setOrder(data);
+      setShowReturnForm(false);
+      toast.success('Return request submitted');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to submit return request');
+    } finally {
+      setSubmittingReturn(false);
+    }
+  };
 
   const currentIdx = order ? Math.max(0, STEPS.findIndex(s => s.key === order.status)) : -1;
 
@@ -170,8 +202,52 @@ export default function OrderTracking() {
                   <Button variant="outline" className="gap-2" data-testid="track-download-invoice"><FileText className="h-4 w-4" />Download Invoice PDF</Button>
                 </a>
                 <a href={`https://wa.me/${settings.whatsapp || '919876543210'}?text=${encodeURIComponent(`Hi, I want an update on order ${order.id}`)}`} target="_blank" rel="noreferrer"><Button variant="outline" className="gap-2"><MessageCircle className="h-4 w-4" />WhatsApp</Button></a>
+                {order.status === 'delivered' && isCustomerLoggedIn() && !showReturnForm && (!order.return_request || order.return_request.status === 'rejected') && (
+                  <Button variant="outline" className="gap-2" onClick={startReturn} data-testid="track-request-return"><RotateCcw className="h-4 w-4" />Request Return / Refund</Button>
+                )}
               </div>
             </div>
+
+            {order.return_request && !showReturnForm && (
+              <div className="bg-card border border-border rounded-2xl p-5">
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                  <div className="font-display font-semibold">Return Request</div>
+                  <Badge variant="outline" className={returnStatusColor[order.return_request.status] || ''}>{returnStatusLabel[order.return_request.status] || order.return_request.status}</Badge>
+                </div>
+                <div className="text-sm space-y-1">
+                  <div className="text-muted-foreground">Reason: {order.return_request.reason}</div>
+                  <div className="text-muted-foreground">Items: {order.return_request.items.map(it => `${it.name} × ${it.quantity}`).join(', ')}</div>
+                  <div className="text-xs text-muted-foreground">Requested {order.return_request.requested_at?.slice(0, 10)}</div>
+                  {order.return_request.resolution_note && <div className="text-xs mt-1">Note from us: {order.return_request.resolution_note}</div>}
+                </div>
+              </div>
+            )}
+
+            {showReturnForm && (
+              <form onSubmit={submitReturn} className="bg-card border border-border rounded-2xl p-5 space-y-3">
+                <div className="font-display font-semibold">Request Return / Refund</div>
+                <div className="space-y-2">
+                  {order.items.map(it => (
+                    <div key={it.product_id} className="flex items-center justify-between gap-2 text-sm border border-border rounded-lg p-2">
+                      <div className="min-w-0"><div className="truncate">{it.name}</div><div className="text-xs text-muted-foreground">Ordered: {it.quantity}</div></div>
+                      <Input
+                        type="number" min={0} max={it.quantity} className="w-20"
+                        value={returnQty[it.product_id] ?? 0}
+                        onChange={(e) => {
+                          const v = Math.max(0, Math.min(it.quantity, Number(e.target.value) || 0));
+                          setReturnQty(q => ({ ...q, [it.product_id]: v }));
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div><Label className="text-xs text-muted-foreground">Reason for return</Label><Textarea rows={3} value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="e.g. Item damaged, wrong item received..." /></div>
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={() => setShowReturnForm(false)}>Cancel</Button>
+                  <Button type="submit" disabled={submittingReturn} data-testid="track-submit-return">{submittingReturn ? 'Submitting...' : 'Submit Request'}</Button>
+                </div>
+              </form>
+            )}
           </div>
         )}
       </Container>

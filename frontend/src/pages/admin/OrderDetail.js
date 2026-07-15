@@ -16,6 +16,7 @@ export default function AdminOrderDetail() {
   const [next, setNext] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [returnNote, setReturnNote] = useState('');
 
   const load = useCallback(() => api.get(`/orders/${oid}`).then(r => { setOrder(r.data); setNext(r.data.status); }), [oid]);
   useEffect(() => { load(); }, [load]);
@@ -36,6 +37,16 @@ export default function AdminOrderDetail() {
     try {
       await api.post(`/orders/${oid}/mark-refunded`);
       toast.success('Marked as refunded');
+      await load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to update'); }
+  };
+
+  const resolveReturn = async (status) => {
+    if (status === 'refunded' && !window.confirm('Confirm the refund has actually been processed (bank transfer/UPI)?')) return;
+    try {
+      await api.put(`/orders/${oid}/return`, { status, note: returnNote });
+      setReturnNote('');
+      toast.success('Return request updated');
       await load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed to update'); }
   };
@@ -65,6 +76,31 @@ export default function AdminOrderDetail() {
       {order.refund_status === 'refunded' && (
         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-3 text-sm text-emerald-700 dark:text-emerald-300">
           Refunded on {order.refunded_at?.slice(0, 10)}
+        </div>
+      )}
+      {order.return_request && (
+        <div className="bg-card border border-border rounded-2xl p-4 space-y-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="font-display font-semibold">Return Request</div>
+            <Badge variant="outline" className="capitalize">{order.return_request.status}</Badge>
+          </div>
+          <div className="text-sm text-muted-foreground">Reason: {order.return_request.reason}</div>
+          <div className="text-sm text-muted-foreground">Items: {order.return_request.items.map(it => `${it.name} × ${it.quantity}`).join(', ')}</div>
+          <div className="text-xs text-muted-foreground">Requested {order.return_request.requested_at?.slice(0, 16).replace('T', ' ')}</div>
+          {order.return_request.status === 'requested' && (
+            <div className="flex flex-wrap gap-2 items-start pt-2">
+              <Textarea placeholder="Optional note to the customer" rows={2} value={returnNote} onChange={(e) => setReturnNote(e.target.value)} className="flex-1 min-w-64" />
+              <Button size="sm" onClick={() => resolveReturn('approved')} data-testid="admin-return-approve">Approve</Button>
+              <Button size="sm" variant="outline" onClick={() => resolveReturn('rejected')} data-testid="admin-return-reject">Reject</Button>
+            </div>
+          )}
+          {order.return_request.status === 'approved' && (
+            <div className="flex flex-wrap gap-2 items-start pt-2">
+              <Textarea placeholder="Optional note to the customer" rows={2} value={returnNote} onChange={(e) => setReturnNote(e.target.value)} className="flex-1 min-w-64" />
+              <Button size="sm" onClick={() => resolveReturn('refunded')} data-testid="admin-return-refund">Mark as Refunded</Button>
+            </div>
+          )}
+          {order.return_request.resolution_note && <div className="text-xs">Note sent: {order.return_request.resolution_note}</div>}
         </div>
       )}
       <div className="grid lg:grid-cols-3 gap-4">
