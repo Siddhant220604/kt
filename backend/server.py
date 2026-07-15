@@ -784,19 +784,22 @@ async def logout_all_admin_devices(request: Request, payload: Dict = Depends(req
 # Full-admin only (require_admin, not require_staff) - a staff account must never be able to
 # create/promote/delete admin-panel accounts, including its own.
 
-def _is_root_admin_email(email: str) -> bool:
-    """The account provisioned from ADMIN_EMAIL/ADMIN_PASSWORD at startup (server.py's
-    seed_db) - permanently protected from deletion so the store can never end up with zero
-    admin accounts, regardless of how many other admin accounts exist or get deleted."""
+def _is_root_admin(user: Dict) -> bool:
+    """The account provisioned from ADMIN_EMAIL/ADMIN_PASSWORD - permanently protected from
+    deletion so the store can never end up with zero admin accounts. Checks the persisted
+    is_root flag (set by seed_db on every startup) first, falling back to a live email match
+    against ADMIN_EMAIL in case an older account was never backfilled with the flag."""
+    if user.get('is_root'):
+        return True
     root_email = (os.environ.get('ADMIN_EMAIL') or '').strip().lower()
-    return bool(root_email) and email.lower() == root_email
+    return bool(root_email) and (user.get('email') or '').lower() == root_email
 
 
 @api_router.get('/admin/users')
 async def list_admin_users(_: Dict = Depends(require_admin)):
     users = await db.users.find({}, {'_id': 0, 'password_hash': 0, 'token_version': 0}).sort('created_at', -1).to_list(500)
     for u in users:
-        u['is_root'] = _is_root_admin_email(u.get('email', ''))
+        u['is_root'] = _is_root_admin(u)
     return users
 
 @api_router.post('/admin/users')
@@ -857,7 +860,7 @@ async def delete_admin_user(uid: str, request: Request, payload: Dict = Depends(
     target = await db.users.find_one({'id': uid})
     if not target:
         raise HTTPException(status_code=404, detail='User not found')
-    if _is_root_admin_email(target.get('email', '')):
+    if _is_root_admin(target):
         raise HTTPException(status_code=400, detail='This is the protected root admin account and cannot be deleted')
     if target.get('role') == 'admin' and await db.users.count_documents({'role': 'admin'}) <= 1:
         raise HTTPException(status_code=400, detail='Cannot delete the last remaining admin account')
@@ -3528,12 +3531,19 @@ async def seed_db():
             'password_hash': auth.hash_password(admin_password),
             'name': 'Kiran Traders Admin',
             'role': 'admin',
+            'is_root': True,
             'token_version': 0,
             'created_at': now_iso(),
         })
         logger.info('Seeded admin user: %s', admin_email.lower())
     elif not await db.users.find_one({'role': 'admin'}):
         logger.warning('No admin user found. Set ADMIN_EMAIL and ADMIN_PASSWORD in environment to create an admin account.')
+    # Persist is_root on the account matching ADMIN_EMAIL every startup (not just at initial
+    # creation) - this account was seeded before is_root existed. Writing it onto the document
+    # makes _is_root_admin()'s check reliable even if ADMIN_EMAIL is later removed from the
+    # environment, instead of depending on that env var being present on every future boot.
+    if admin_email:
+        await db.users.update_one({'email': admin_email.lower()}, {'$set': {'is_root': True}})
 
     # settings
     if not await db.settings.find_one({'id': 'main'}):
