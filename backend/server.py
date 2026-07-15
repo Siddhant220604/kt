@@ -3076,6 +3076,32 @@ async def admin_analytics(days: int = Query(30, ge=1, le=180), _: Dict = Depends
         tp['product_id'] = tp.pop('_id')
         tp['revenue'] = round(tp.get('revenue', 0), 2)
 
+    # Reorder suggestions: estimate "will run out in ~N days" from actual sales velocity over
+    # the selected range, instead of a flat stock-below-threshold check - a product selling 20
+    # units/day at 100 in stock is far more urgent than one selling 1/day at the same stock.
+    velocity_pipeline = [
+        {'$match': {'status': {'$ne': 'cancelled'}, 'created_at': {'$gte': start.strftime('%Y-%m-%d')}}},
+        {'$unwind': '$items'},
+        {'$group': {'_id': '$items.product_id', 'qty': {'$sum': '$items.quantity'}}},
+    ]
+    qty_by_product = {d['_id']: d['qty'] for d in await db.orders.aggregate(velocity_pipeline).to_list(10000)}
+    active_products = await db.products.find({'active': True}, {'_id': 0, 'id': 1, 'name': 1, 'stock': 1}).to_list(10000)
+    reorder_suggestions = []
+    for p in active_products:
+        qty = qty_by_product.get(p['id'], 0)
+        if qty <= 0:
+            continue
+        velocity = qty / days
+        stock = p.get('stock', 0)
+        days_left = round(stock / velocity, 1) if velocity > 0 else None
+        if days_left is not None and days_left <= 30:
+            reorder_suggestions.append({
+                'product_id': p['id'], 'name': p['name'], 'stock': stock,
+                'daily_velocity': round(velocity, 2), 'days_left': days_left,
+            })
+    reorder_suggestions.sort(key=lambda r: r['days_left'])
+    reorder_suggestions = reorder_suggestions[:15]
+
     return {
         'days': days,
         'revenue_trend': revenue_trend,
@@ -3087,6 +3113,7 @@ async def admin_analytics(days: int = Query(30, ge=1, le=180), _: Dict = Depends
         'one_time_customers': total_customers_range - repeat_customers,
         'repeat_rate': repeat_rate,
         'top_products': top_products,
+        'reorder_suggestions': reorder_suggestions,
     }
 
 @api_router.get('/admin/audit-logs')

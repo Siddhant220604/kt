@@ -1,9 +1,17 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, formatINR } from '../../lib/api';
 import { Skeleton } from '../../components/ui/skeleton';
+import { Badge } from '../../components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '../../components/ui/tabs';
-import { IndianRupee, ShoppingBag, TrendingUp, Repeat } from 'lucide-react';
+import { IndianRupee, ShoppingBag, TrendingUp, Repeat, AlertTriangle } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+
+const reorderUrgency = (days) => days <= 7
+  ? 'bg-red-500/10 text-red-700 border-red-500/20'
+  : days <= 14
+    ? 'bg-amber-500/10 text-amber-700 border-amber-500/20'
+    : 'bg-muted text-muted-foreground border-border';
 
 export default function AdminAnalytics() {
   const [days, setDays] = useState('30');
@@ -94,6 +102,28 @@ export default function AdminAnalytics() {
                       <td className="px-4 py-2.5 font-medium">{p.name}</td>
                       <td className="py-2.5">{p.qty}</td>
                       <td className="py-2.5">{formatINR(p.revenue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-2xl overflow-hidden">
+            <div className="flex items-center gap-2 font-display font-semibold p-4 pb-0"><AlertTriangle className="h-4 w-4 text-amber-600" />Reorder Suggestions</div>
+            <p className="text-xs text-muted-foreground px-4 pt-1">Estimated from sales velocity over the last {stats.days} days, not just a flat low-stock threshold.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm mt-2">
+                <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40"><tr><th className="px-4 py-2.5">Product</th><th>Stock</th><th>Sold / Day</th><th>Est. Days Left</th></tr></thead>
+                <tbody>
+                  {stats.reorder_suggestions.length === 0 ? (
+                    <tr><td colSpan={4} className="text-center py-8 text-muted-foreground text-sm">Nothing projected to run out within 30 days</td></tr>
+                  ) : stats.reorder_suggestions.map(p => (
+                    <tr key={p.product_id} className="border-t border-border">
+                      <td className="px-4 py-2.5 font-medium"><Link to={`/admin/products?edit=${p.product_id}`} className="hover:text-primary">{p.name}</Link></td>
+                      <td className="py-2.5">{p.stock}</td>
+                      <td className="py-2.5">{p.daily_velocity}</td>
+                      <td className="py-2.5"><Badge variant="outline" className={reorderUrgency(p.days_left)}>{p.days_left} days</Badge></td>
                     </tr>
                   ))}
                 </tbody>
