@@ -2456,8 +2456,9 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     email = settings.get('email', '')
     addr = order.get('address', {})
     invoice_date = order.get('created_at', '')[:10] if order.get('created_at') else ''
+    invoice_number = order.get('invoice_number', '') or '-'
 
-    # ==================== TOP STRIP: GSTIN/PAN | TAX INVOICE | COPY BOXES ====================
+    # ==================== TOP STRIP: GSTIN/PAN | TAX INVOICE | INVOICE NO. ====================
     gst_pan_block = Table([
         [Paragraph(f'<b>GSTIN :</b> {gstin}', small_style)],
         [Paragraph(f'<b>PAN :</b> {pan}', small_style)],
@@ -2467,22 +2468,18 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
         ('TOPPADDING', (0, 0), (-1, -1), 1.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
     ]))
 
-    copy_rows = [
-        ['ORIGINAL', 'White', 'For Receiver'],
-        ['DUPLICATE', 'Pink', 'For Transporter'],
-        ['TRIPLICATE', 'Yellow', 'For Supplier'],
-    ]
-    copy_table = Table(copy_rows, colWidths=[24*mm, 15*mm, 30*mm])
-    copy_table.setStyle(TableStyle([
+    invoice_no_block = Table([
+        [Paragraph('Invoice No.', label_style)],
+        [Paragraph(invoice_number, order_id_style)],
+    ], colWidths=[69*mm])
+    invoice_no_block.setStyle(TableStyle([
         ('BOX', (0, 0), (-1, -1), 0.75, BLACK),
-        ('INNERGRID', (0, 0), (-1, -1), 0.5, BLACK),
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 8),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
 
-    top_strip = Table([[gst_pan_block, Paragraph('TAX INVOICE', tax_invoice_style), copy_table]], colWidths=[58*mm, 65*mm, 69*mm])
+    top_strip = Table([[gst_pan_block, Paragraph('TAX INVOICE', tax_invoice_style), invoice_no_block]], colWidths=[58*mm, 65*mm, 69*mm])
     top_strip.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('ALIGN', (1, 0), (1, 0), 'CENTER'),
@@ -2533,9 +2530,7 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     # ==================== ORDER ID / STATE  |  TRANSPORT / SUPPLY ====================
     seller_state = 'Uttar Pradesh'
     seller_state_code = '09'
-    invoice_number = order.get('invoice_number', '') or '-'
     order_id_block = Table([
-        [Paragraph(f"<b>Invoice No. :</b> {invoice_number}", small_style)],
         [Paragraph('Order ID', label_style)],
         [Paragraph(order.get('id', ''), order_id_style)],
         [Paragraph(f"State : {seller_state}&nbsp;&nbsp;&nbsp;State Code : {seller_state_code}", small_style)],
@@ -2543,7 +2538,7 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     order_id_block.setStyle(TableStyle([
         ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
         ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('LINEBELOW', (0, 1), (0, 2), 0.4, BLACK),
+        ('LINEBELOW', (0, 0), (0, 1), 0.4, BLACK),
     ]))
 
     mode_supply_block = Table([
