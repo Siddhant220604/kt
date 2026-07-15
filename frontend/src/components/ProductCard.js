@@ -31,7 +31,7 @@ const ProductCard = ({ product }) => {
           className="absolute top-2 right-2 h-9 w-9 rounded-full bg-background/90 backdrop-blur border border-border grid place-items-center hover:bg-background">
           <Heart className={`h-4 w-4 ${has(product.id) ? 'fill-destructive text-destructive' : ''}`} />
         </button>
-        {discount > 0 && <Badge className="absolute top-2 left-2 bg-[hsl(var(--brand-marigold))] text-black">-{discount}%</Badge>}
+        {discount > 0 && <Badge className="absolute top-2 left-2 bg-[hsl(var(--brand-marigold))] text-black">{product.on_sale ? 'Flash Sale ' : ''}-{discount}%</Badge>}
         {!inStock && <div className="absolute inset-0 grid place-items-center bg-background/70"><Badge variant="secondary">Out of stock</Badge></div>}
       </div>
       <div className="p-3.5">

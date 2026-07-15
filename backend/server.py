@@ -383,6 +383,12 @@ class ProductIn(BaseModel):
     # the base `price` applies below 10 units, 95 from 10-49, 90 from 50+. Kept sorted by
     # min_qty ascending so effective_unit_price() can just walk it front-to-back.
     price_tiers: List[PriceTier] = []
+    # Scheduled flash sale: while now is within [sale_starts_at, sale_ends_at], apply_flash_sale()
+    # substitutes sale_price for the base price on every read - no cron job or manual toggle
+    # needed, the window activates/expires exactly on schedule.
+    sale_price: Optional[float] = Field(None, gt=0, le=10_000_000)
+    sale_starts_at: Optional[str] = Field(None, max_length=40)
+    sale_ends_at: Optional[str] = Field(None, max_length=40)
 
     @field_validator('price_tiers')
     @classmethod
@@ -562,11 +568,6 @@ class SavedAddressUpdate(BaseModel):
     def validate_gst_number(cls, v: Optional[str]) -> Optional[str]:
         return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GST number')
 
-    @field_validator('gst_number')
-    @classmethod
-    def validate_gst_number(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GST number')
-
 class CustomerPasswordChange(BaseModel):
     model_config = ConfigDict(extra='forbid')
     current_password: str = Field(min_length=1, max_length=200)
@@ -588,6 +589,7 @@ class CouponIn(BaseModel):
     value: float = Field(gt=0, le=1_000_000)
     min_order: float = Field(0, ge=0, le=10_000_000)
     max_discount: Optional[float] = Field(0, ge=0, le=10_000_000)
+    starts_at: Optional[str] = Field('', max_length=40)
     expiry: Optional[str] = Field('', max_length=40)
     active: bool = True
     usage_limit: int = Field(0, ge=0, le=1_000_000)
@@ -919,6 +921,7 @@ async def list_products(
     featured: Optional[bool] = None,
     in_stock: Optional[bool] = None,
     sort: Optional[str] = 'newest',
+    admin_payload: Optional[Dict] = Depends(dependencies.optional_admin),
     page: int = 1,
     limit: int = 24,
 ):
@@ -951,6 +954,11 @@ async def list_products(
     skip = max(0, (page - 1) * limit)
     total = await db.products.count_documents(q)
     docs = await db.products.find(q, {'_id': 0}).sort(sort_by).skip(skip).limit(limit).to_list(limit)
+    # Skip the live sale-price substitution for an authenticated admin - the admin product
+    # list/edit form needs the real underlying price and sale window, not the discounted
+    # price a shopper would currently see.
+    if not admin_payload:
+        docs = [apply_flash_sale(d) for d in docs]
     return {'items': docs, 'total': total, 'page': page, 'limit': limit, 'pages': max(1, (total + limit - 1) // limit)}
 
 PRODUCT_CSV_COLUMNS = ['id', 'name', 'category', 'description', 'short_description', 'size', 'unit', 'price', 'compare_price', 'moq', 'stock', 'images', 'tags', 'featured', 'active']
@@ -989,15 +997,19 @@ async def product_import_template(_: Dict = Depends(require_admin)):
     })
 
 @api_router.get('/products/{pid}')
-async def get_product(pid: str):
+async def get_product(pid: str, admin_payload: Optional[Dict] = Depends(dependencies.optional_admin)):
     p = await db.products.find_one({'id': pid}, {'_id': 0}) or await db.products.find_one({'slug': pid}, {'_id': 0})
     if not p:
         raise HTTPException(status_code=404, detail='Product not found')
+    if not admin_payload:
+        p = apply_flash_sale(p)
     # attach category
     cat = await db.categories.find_one({'id': p.get('category_id')}, {'_id': 0})
     p['category'] = cat
     # related
     related = await db.products.find({'category_id': p.get('category_id'), 'id': {'$ne': p['id']}, 'active': True}, {'_id': 0}).limit(6).to_list(6)
+    if not admin_payload:
+        related = [apply_flash_sale(r) for r in related]
     p['related'] = related
     return p
 
@@ -1116,10 +1128,34 @@ async def list_coupons(_: Dict = Depends(require_admin)):
     docs = await db.coupons.find({}, {'_id': 0}).sort('created_at', -1).to_list(500)
     return docs
 
+def _parse_coupon_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    except ValueError:
+        return None
+
+
+def _coupon_is_live(c: Dict) -> bool:
+    """A coupon scheduled with starts_at/expiry is only "live" within that window - lets a
+    time-bound offer switch on/off on its own schedule instead of an admin manually flipping
+    `active` at the right moment."""
+    now = datetime.now(timezone.utc)
+    starts = _parse_coupon_dt(c.get('starts_at'))
+    if starts and now < starts:
+        return False
+    ends = _parse_coupon_dt(c.get('expiry'))
+    if ends and now > ends:
+        return False
+    return True
+
+
 @api_router.get('/coupons/public')
 async def public_coupons():
     docs = await db.coupons.find({'active': True}, {'_id': 0}).sort('created_at', -1).to_list(500)
-    return docs
+    return [c for c in docs if _coupon_is_live(c)]
 
 @api_router.post('/coupons')
 async def create_coupon(c: CouponIn, request: Request, payload: Dict = Depends(require_admin)):
@@ -1162,6 +1198,9 @@ async def validate_coupon(req: CouponValidate, request: Request):
     c = await db.coupons.find_one({'code': code, 'active': True}, {'_id': 0})
     if not c:
         raise HTTPException(status_code=404, detail='Invalid coupon')
+    starts = _parse_coupon_dt(c.get('starts_at'))
+    if starts and datetime.now(timezone.utc) < starts:
+        raise HTTPException(status_code=400, detail='This coupon is not active yet')
     if c.get('expiry'):
         try:
             exp = datetime.fromisoformat(c['expiry'])
@@ -1429,6 +1468,39 @@ async def _send_abandoned_cart_nudge(cart: Dict[str, Any]) -> None:
         logger.exception('Failed to send abandoned-cart nudge for %s', mobile)
 
 
+def apply_flash_sale(p: Dict) -> Dict:
+    """If a flash-sale window is set on the product and `now` falls within it, swaps `price`
+    for `sale_price` and moves the original price into `compare_price` (reusing the existing
+    strikethrough/discount-badge UI) and sets `on_sale`. Computed live on every read rather
+    than by flipping a flag on a schedule, so the sale starts/ends exactly on time with no
+    cron job or admin toggle involved."""
+    p['on_sale'] = False
+    sale_price = p.get('sale_price')
+    ends = p.get('sale_ends_at')
+    if not sale_price or not ends:
+        return p
+    try:
+        now = datetime.now(timezone.utc)
+        ends_dt = datetime.fromisoformat(ends.replace('Z', '+00:00'))
+        if ends_dt.tzinfo is None:
+            ends_dt = ends_dt.replace(tzinfo=timezone.utc)
+        starts = p.get('sale_starts_at')
+        starts_dt = None
+        if starts:
+            starts_dt = datetime.fromisoformat(starts.replace('Z', '+00:00'))
+            if starts_dt.tzinfo is None:
+                starts_dt = starts_dt.replace(tzinfo=timezone.utc)
+        if now <= ends_dt and (starts_dt is None or now >= starts_dt):
+            original_price = p.get('price', 0)
+            if not p.get('compare_price') or p['compare_price'] <= original_price:
+                p['compare_price'] = original_price
+            p['price'] = sale_price
+            p['on_sale'] = True
+    except (ValueError, TypeError):
+        pass
+    return p
+
+
 def effective_unit_price(product: Dict[str, Any], quantity: int) -> float:
     """Returns the per-unit price for buying `quantity` of `product`, applying whichever
     bulk-pricing tier the quantity qualifies for (highest min_qty <= quantity), falling back
@@ -1454,6 +1526,7 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
         p = await db.products.find_one({'id': it.product_id}, {'_id': 0})
         if not p:
             raise HTTPException(status_code=400, detail=f'Product not found: {it.name}')
+        p = apply_flash_sale(p)
         if p.get('stock', 0) < it.quantity:
             raise HTTPException(status_code=400, detail=f'Insufficient stock for {p["name"]}')
         unit_price = effective_unit_price(p, it.quantity)

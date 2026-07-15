@@ -161,10 +161,13 @@ export default function ProductDetail() {
 
               <div className="mt-5 flex items-end gap-3">
                 <div className="font-display text-3xl md:text-4xl font-bold text-foreground" data-testid="product-detail-price">{formatINR(unitPrice)}</div>
-                {discount > 0 && <><div className="text-lg text-muted-foreground line-through">{formatINR(product.compare_price)}</div><Badge className="bg-[hsl(var(--brand-marigold))] text-black">-{discount}%</Badge></>}
+                {discount > 0 && <><div className="text-lg text-muted-foreground line-through">{formatINR(product.compare_price)}</div><Badge className="bg-[hsl(var(--brand-marigold))] text-black">{product.on_sale ? 'Flash Sale ' : ''}-{discount}%</Badge></>}
                 <div className="text-xs text-muted-foreground pb-1">per {product.unit}</div>
                 {unitPrice < product.price && <Badge className="bg-emerald-500/10 text-emerald-700 border-emerald-500/20" variant="outline">Bulk price applied</Badge>}
               </div>
+              {product.on_sale && product.sale_ends_at && (
+                <div className="mt-1 text-xs text-destructive font-medium">Sale ends {new Date(product.sale_ends_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</div>
+              )}
               {product.size && <div className="mt-2 text-sm"><span className="text-muted-foreground">Size:</span> <span className="font-medium">{product.size}</span></div>}
 
               {hasTiers && (

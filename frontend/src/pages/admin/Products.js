@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import { toast } from 'sonner';
 
-const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [], price_tiers: [] };
+const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '' };
 
 const readFileAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
 
@@ -39,7 +39,7 @@ export default function AdminProducts() {
   useEffect(() => { load(); }, [load]);
 
   const openNew = () => setEdit({ ...empty, category_id: cats[0]?.id || '' });
-  const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specs: p.specs || {}, tags: p.tags || [], price_tiers: p.price_tiers || [] });
+  const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specs: p.specs || {}, tags: p.tags || [], price_tiers: p.price_tiers || [], sale_price: p.sale_price || '', sale_starts_at: p.sale_starts_at || '', sale_ends_at: p.sale_ends_at || '' });
 
   // Deep-link support (e.g. from the dashboard's low-stock list): /admin/products?edit=<id>
   // opens straight into that product's edit dialog instead of requiring a manual search + click.
@@ -66,6 +66,9 @@ export default function AdminProducts() {
         price_tiers: (edit.price_tiers || [])
           .filter(t => t.min_qty && t.price)
           .map(t => ({ min_qty: Number(t.min_qty), price: Number(t.price) })),
+        sale_price: edit.sale_price ? Number(edit.sale_price) : null,
+        sale_starts_at: edit.sale_starts_at || null,
+        sale_ends_at: edit.sale_ends_at || null,
       };
       if (edit.id) { await api.put(`/products/${edit.id}`, payload); toast.success('Product updated'); }
       else { await api.post('/products', payload); toast.success('Product created'); }
@@ -159,7 +162,7 @@ export default function AdminProducts() {
                     <td className="py-2.5">{formatINR(p.price)}</td>
                     <td className="py-2.5">{p.stock}</td>
                     <td className="py-2.5">{p.moq}</td>
-                    <td className="py-2.5">{p.active ? <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/20">Active</Badge> : <Badge variant="outline">Draft</Badge>}{p.featured && <Badge className="ml-1 bg-[hsl(var(--brand-marigold))] text-black">Featured</Badge>}</td>
+                    <td className="py-2.5">{p.active ? <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/20">Active</Badge> : <Badge variant="outline">Draft</Badge>}{p.featured && <Badge className="ml-1 bg-[hsl(var(--brand-marigold))] text-black">Featured</Badge>}{p.sale_price && <Badge variant="outline" className="ml-1 bg-red-500/10 text-red-700 border-red-500/20">Flash sale set</Badge>}</td>
                     <td className="py-2.5"><div className="flex gap-1"><Button size="icon" variant="ghost" onClick={() => openEdit(p)} data-testid={`edit-product-${p.id}`}><Edit className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => del(p)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button></div></td>
                   </tr>
                 ))}
@@ -204,6 +207,16 @@ export default function AdminProducts() {
                     <Button type="button" size="icon" variant="ghost" onClick={() => rmTier(i)} className="text-destructive shrink-0"><X className="h-4 w-4" /></Button>
                   </div>
                 ))}
+              </div>
+
+              <div>
+                <Label className="text-xs text-muted-foreground">Flash Sale (optional)</Label>
+                <p className="text-xs text-muted-foreground mb-2">While the window below is active, shoppers see this price instead of the regular price - no manual toggling, it switches on/off exactly on schedule.</p>
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <div><Label className="text-xs text-muted-foreground">Sale Price</Label><Input type="number" value={edit.sale_price} onChange={(e) => setEdit({ ...edit, sale_price: e.target.value })} placeholder="e.g. 79" data-testid="admin-product-sale-price" /></div>
+                  <div><Label className="text-xs text-muted-foreground">Starts At</Label><Input type="datetime-local" value={edit.sale_starts_at} onChange={(e) => setEdit({ ...edit, sale_starts_at: e.target.value })} /></div>
+                  <div><Label className="text-xs text-muted-foreground">Ends At</Label><Input type="datetime-local" value={edit.sale_ends_at} onChange={(e) => setEdit({ ...edit, sale_ends_at: e.target.value })} /></div>
+                </div>
               </div>
 
               <div><Label className="text-xs text-muted-foreground">Description</Label><Textarea rows={3} value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></div>

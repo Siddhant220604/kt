@@ -9,7 +9,7 @@ import { Badge } from '../../components/ui/badge';
 import { Plus, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-const empty = { code: '', type: 'percent', value: 10, min_order: 0, max_discount: 0, expiry: '', active: true, usage_limit: 0 };
+const empty = { code: '', type: 'percent', value: 10, min_order: 0, max_discount: 0, starts_at: '', expiry: '', active: true, usage_limit: 0 };
 
 export default function AdminCoupons() {
   const [rows, setRows] = useState([]);
@@ -41,6 +41,13 @@ export default function AdminCoupons() {
                 <div className="font-mono font-bold text-lg">{c.code}</div>
                 <div className="text-sm text-muted-foreground">{c.type === 'percent' ? `${c.value}% off` : `${formatINR(c.value)} off`}</div>
                 <div className="text-xs text-muted-foreground">Min order: {formatINR(c.min_order)} • Used: {c.used_count}</div>
+                {(c.starts_at || c.expiry) && (
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {c.starts_at && `From ${new Date(c.starts_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`}
+                    {c.starts_at && c.expiry && ' '}
+                    {c.expiry && `Until ${new Date(c.expiry).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`}
+                  </div>
+                )}
               </div>
               <div className="flex gap-1">
                 <Button size="icon" variant="ghost" onClick={() => setEdit(c)}><Edit className="h-4 w-4" /></Button>
@@ -63,7 +70,10 @@ export default function AdminCoupons() {
                 <div><Label className="text-xs text-muted-foreground">Min Order</Label><Input type="number" value={edit.min_order} onChange={(e) => setEdit({ ...edit, min_order: e.target.value })} /></div>
                 <div><Label className="text-xs text-muted-foreground">Max Discount (0 = none)</Label><Input type="number" value={edit.max_discount} onChange={(e) => setEdit({ ...edit, max_discount: e.target.value })} /></div>
                 <div><Label className="text-xs text-muted-foreground">Usage Limit (0 = unlimited)</Label><Input type="number" value={edit.usage_limit} onChange={(e) => setEdit({ ...edit, usage_limit: e.target.value })} /></div>
+                <div><Label className="text-xs text-muted-foreground">Starts At (optional)</Label><Input type="datetime-local" value={edit.starts_at} onChange={(e) => setEdit({ ...edit, starts_at: e.target.value })} /></div>
+                <div><Label className="text-xs text-muted-foreground">Expires At (optional)</Label><Input type="datetime-local" value={edit.expiry} onChange={(e) => setEdit({ ...edit, expiry: e.target.value })} /></div>
               </div>
+              <p className="text-xs text-muted-foreground">Leave Starts/Expires blank for a coupon that's always live while Active is checked. Set both to auto-activate and auto-expire on schedule, without needing to flip Active manually.</p>
               <label className="flex items-center gap-2"><input type="checkbox" checked={edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} /> Active</label>
             </div>
           )}
