@@ -479,6 +479,13 @@ class PaymentVerifyRequest(BaseModel):
     razorpay_payment_id: str = Field(min_length=1, max_length=100)
     razorpay_signature: str = Field(min_length=1, max_length=200)
 
+class PaymentFailedRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    order_id: str = Field(min_length=1, max_length=100)
+    # Free-text reason from the client (e.g. 'dismissed', 'verification_failed') purely for our
+    # own logs/analytics - never shown to the customer and never used to build the WhatsApp send.
+    reason: Optional[str] = Field('', max_length=200)
+
 class OrderStatusUpdate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     status: Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
@@ -1390,8 +1397,22 @@ async def verify_razorpay_payment(req: PaymentVerifyRequest, request: Request, b
     return {'ok': True, 'order': updated}
 
 
+@api_router.post('/payment/failed')
+async def payment_failed(req: PaymentFailedRequest, request: Request, background_tasks: BackgroundTasks):
+    """Called by the checkout page when an online payment doesn't complete - Razorpay's modal
+    `ondismiss` (customer closed the popup) or the payment `handler`'s error path (verification
+    failed). Fires the one-time payment_failed WhatsApp nudge. Deliberately returns {'ok': True}
+    even for unknown/ineligible orders so a caller can't probe order state through this endpoint;
+    notify_payment_failed() enforces the real eligibility (online, unpaid, not already notified)."""
+    # Auth-style limit with backoff, keyed by order_id - bounds how often the same order can
+    # trigger a customer-facing message, so this can't be used to spam a real customer's phone.
+    dependencies.check_auth_rate_limit(request, 'payment_failed', req.order_id)
+    background_tasks.add_task(notify_payment_failed, req.order_id, req.reason or 'client_reported')
+    return {'ok': True}
+
+
 @api_router.post('/payment/webhook')
-async def razorpay_webhook(request: Request):
+async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
     signature = request.headers.get('X-Razorpay-Signature', '')
     if not signature or not RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=400, detail='Invalid webhook request')
@@ -1407,11 +1428,17 @@ async def razorpay_webhook(request: Request):
         raise HTTPException(status_code=400, detail='Invalid webhook payload')
 
     event = payload.get('event', '')
-    if event in {'payment.authorized', 'order.paid'}:
-        payment = payload.get('payload', {}).get('payment', {}).get('entity', {})
-        order_id = payment.get('notes', {}).get('order_id') or payload.get('payload', {}).get('order', {}).get('entity', {}).get('receipt')
-        if order_id:
-            await db.orders.update_one({'id': order_id}, {'$set': {
+    payment = payload.get('payload', {}).get('payment', {}).get('entity', {})
+    order_id = payment.get('notes', {}).get('order_id') or payload.get('payload', {}).get('order', {}).get('entity', {}).get('receipt')
+
+    if event in {'payment.authorized', 'order.paid'} and order_id:
+        # Conditional update: only the call that actually flips payment_status from not-paid to
+        # paid gets a matching document back, so we send the confirmation WhatsApp exactly once
+        # even though /payment/verify may also mark this same order paid. Whichever path wins the
+        # race sends; the loser's update simply doesn't match and stays silent.
+        updated = await db.orders.find_one_and_update(
+            {'id': order_id, 'payment_status': {'$ne': 'paid'}},
+            {'$set': {
                 'payment_status': 'paid',
                 'status': 'confirmed',
                 'updated_at': now_iso(),
@@ -1420,7 +1447,20 @@ async def razorpay_webhook(request: Request):
                     'razorpay_payment_id': payment.get('id'),
                     'verified_at': now_iso(),
                 },
-            }})
+            }},
+            projection={'_id': 0},
+            return_document=ReturnDocument.AFTER,
+        )
+        if updated:
+            settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+            # Closes the "customer paid then closed the tab before /payment/verify ran" gap - the
+            # order is now confirmed server-side, so send the same order_confirmation the verify
+            # path would have. (Guarded above so this never double-sends with /payment/verify.)
+            background_tasks.add_task(send_order_status_update_whatsapp, updated, 'confirmed', settings)
+    elif event == 'payment.failed' and order_id:
+        # A genuine gateway-side failure - fire the same one-time payment_failed nudge the
+        # /payment/failed endpoint uses. notify_payment_failed() dedupes across both triggers.
+        background_tasks.add_task(notify_payment_failed, order_id, 'razorpay_webhook')
     return {'ok': True}
 
 
@@ -1701,7 +1741,16 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
 
     await db.orders.insert_one(doc)
     doc.pop('_id', None)
-    background_tasks.add_task(send_order_notification, doc, settings)
+    # Only fire the "order_pending" receipt notification here for COD orders. For 'online'
+    # orders no payment has happened yet at this point - the frontend hasn't even opened the
+    # Razorpay checkout modal (it calls /payment/create-order and /payment/verify *after* this
+    # request returns). Sending "pending confirmation" here would tell the customer an order
+    # exists before they've paid for it, including if they abandon/fail the payment entirely.
+    # Online orders instead get their first WhatsApp message from /payment/verify or the
+    # Razorpay webhook, once payment is actually confirmed (see send_order_status_update_whatsapp
+    # calls there, which send the 'confirmed' template).
+    if doc.get('payment_method') == 'cod':
+        background_tasks.add_task(send_order_notification, doc, settings)
     for it in reserved:
         background_tasks.add_task(maybe_send_low_stock_alert, it['product_id'], settings)
     # The customer just completed checkout, so any cart snapshot synced earlier for this
@@ -2447,6 +2496,11 @@ async def delete_question(qid: str, request: Request, payload: Dict = Depends(re
 #   order_cancelled:            [customer_name, order_id, total_amount]
 #   invoice_ready:              [customer_name, order_id, invoice_number]
 #   review_request:             [customer_name, order_id]
+#   payment_failed:             [customer_name, order_id, total_amount]
+# NOTE: 'payment_failed' must be created and approved in Meta WhatsApp Manager (Utility category,
+# English) before it will deliver - suggested body wording (keep the 3 {{n}} variables in this
+# order): "Hi {{1}}, your payment for order {{2}} (Rs. {{3}}) didn't go through. Your items are
+# still reserved - tap below to try again. Need help? Just reply here."
 WHATSAPP_TEMPLATE_ORDER_PENDING = 'order_pending'
 WHATSAPP_TEMPLATE_ORDER_CONFIRMATION = 'order_confirmation'
 WHATSAPP_TEMPLATE_ORDER_PACKED = 'order_packed'
@@ -2455,6 +2509,7 @@ WHATSAPP_TEMPLATE_ORDER_DELIVERED = 'order_delivered'
 WHATSAPP_TEMPLATE_ORDER_CANCELLED = 'order_cancelled'
 WHATSAPP_TEMPLATE_INVOICE_READY = 'invoice_ready'
 WHATSAPP_TEMPLATE_REVIEW_REQUEST = 'review_request'
+WHATSAPP_TEMPLATE_PAYMENT_FAILED = 'payment_failed'
 
 # Order statuses that have an approved lifecycle template, used by send_order_status_update_whatsapp()
 # below. 'pending' is deliberately absent here - that notification is sent once, directly from order
@@ -2509,6 +2564,72 @@ def send_order_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]
         record_whatsapp_message_sent(result, template=WHATSAPP_TEMPLATE_ORDER_PENDING, order_id=order_id)
     except Exception:
         logger.exception('Failed to send WhatsApp order notification for order %s', order_id)
+
+
+def send_payment_failed_whatsapp(order: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> None:
+    """Notifies the customer that an online payment didn't complete (dismissed modal, client-side
+    failure, or a Razorpay `payment.failed` webhook), nudging them to retry. Uses the approved
+    `payment_failed` template so it delivers as a business-initiated message even outside the 24h
+    customer-service window. Idempotency (only-once-per-order) and the 'not already paid' guard are
+    enforced by the caller before this runs; this function just sends. Never raises - a background
+    task must never affect the payment/order flow it's attached to."""
+    address = order.get('address') or {}
+    mobile = str(address.get('mobile') or '').strip()
+    if not mobile:
+        logger.info('Payment-failed WhatsApp skipped: no customer mobile number for order %s', order.get('id'))
+        return
+
+    phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE)
+    if not phone:
+        logger.info('Payment-failed WhatsApp skipped: invalid mobile number for order %s', order.get('id'))
+        return
+
+    order_id = order.get('id') or order.get('order_number') or 'N/A'
+    customer_name = address.get('name') or 'Customer'
+    total_amount = f"{order.get('total', 0):.2f}"
+
+    config = get_whatsapp_config()
+    if not config.is_valid:
+        logger.warning('WhatsApp Cloud API not configured; payment-failed notification skipped for order %s', order_id)
+        return
+
+    try:
+        # Body variables: {{1}} customer name, {{2}} order id, {{3}} total amount.
+        result = send_template_message(
+            phone,
+            WHATSAPP_TEMPLATE_PAYMENT_FAILED,
+            body_parameters=[customer_name, order_id, total_amount],
+            config=config,
+        )
+        record_whatsapp_message_sent(result, template=WHATSAPP_TEMPLATE_PAYMENT_FAILED, order_id=order_id)
+        logger.info('Payment-failed WhatsApp sent for order %s', order_id)
+    except Exception:
+        logger.exception('Failed to send payment-failed WhatsApp notification for order %s', order_id)
+
+
+async def notify_payment_failed(order_id: str, reason: str = '') -> None:
+    """Atomically claims the one-time payment-failed notification for an online order and, if this
+    call is the one that claimed it, enqueues the WhatsApp send in a worker thread. The atomic
+    find_one_and_update makes this safe when both triggers (the /payment/failed endpoint AND the
+    Razorpay payment.failed webhook) fire for the same failure - only the first wins, so the
+    customer gets exactly one message. Skips silently if the order is missing, isn't an online
+    order, was already paid, or was already notified."""
+    order = await db.orders.find_one_and_update(
+        {
+            'id': order_id,
+            'payment_method': 'online',
+            'payment_status': {'$ne': 'paid'},
+            'payment_failed_notified': {'$ne': True},
+        },
+        {'$set': {'payment_failed_notified': True, 'payment_failed_at': now_iso(), 'payment_failed_reason': reason or ''}},
+        projection={'_id': 0},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not order:
+        # No matching order to notify (already paid, already notified, COD, or not found).
+        return
+    settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    await asyncio.to_thread(send_payment_failed_whatsapp, order, settings)
 
 
 # Feature 1: per-status WhatsApp text fallback for statuses with no approved template

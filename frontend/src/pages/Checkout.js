@@ -184,6 +184,10 @@ export default function Checkout() {
           modal: {
             ondismiss: () => {
               toast.error('Payment was cancelled');
+              // Fire-and-forget: let the backend send the "payment didn't complete, try again"
+              // WhatsApp nudge. Never block or surface errors from this - it must not affect the
+              // customer's ability to retry checkout.
+              api.post('/payment/failed', { order_id: data.id, reason: 'dismissed' }).catch(() => {});
               setPlacing(false);
             },
           },
@@ -200,6 +204,8 @@ export default function Checkout() {
               nav(`/order-success/${data.id}`, { state: { mobile: form.mobile, order: data } });
             } catch (err) {
               toast.error(err.response?.data?.detail || 'Payment verification failed');
+              // Same nudge as the dismiss path - the payment didn't complete from our side.
+              api.post('/payment/failed', { order_id: data.id, reason: 'verification_failed' }).catch(() => {});
             } finally {
               setPlacing(false);
             }
