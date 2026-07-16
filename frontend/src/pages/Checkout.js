@@ -147,6 +147,7 @@ export default function Checkout() {
     if (!form.pincode || form.pincode.length < 6) return toast.error('Enter a valid pincode');
     setPlacing(true);
 
+    let rzpOpened = false;
     try {
       const payload = {
         items: items.map(i => ({
@@ -204,6 +205,7 @@ export default function Checkout() {
             }
           },
         });
+        rzpOpened = true;
         rzp.open();
         return;
       }
@@ -219,7 +221,10 @@ export default function Checkout() {
         toast.error(err.response?.data?.detail || 'Failed to place order');
       }
     } finally {
-      if (payment !== 'online') setPlacing(false);
+      // Once the Razorpay modal has opened, its own handler/ondismiss callbacks own
+      // resetting `placing` - resetting it here too would let the button unlock while
+      // the modal is still open.
+      if (!rzpOpened) setPlacing(false);
     }
   };
 

@@ -1313,7 +1313,11 @@ async def create_razorpay_order(req: PaymentCreateOrderRequest, request: Request
     }
 
     try:
-        response = requests.post(
+        # Run off the event loop - requests is synchronous/blocking, and this route is
+        # async, so calling it inline would stall every other concurrent request on this
+        # worker (including unrelated customers' checkouts) for up to the 15s timeout.
+        response = await asyncio.to_thread(
+            requests.post,
             'https://api.razorpay.com/v1/orders',
             auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
             json=payload,
