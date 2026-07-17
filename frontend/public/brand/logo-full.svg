@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 90" width="380" height="90" role="img" aria-labelledby="ktFullTitle">
+<title id="ktFullTitle">Kiran Traders &#8211; wholesale packaging, Lucknow</title>
+<g transform="translate(2 3) scale(0.6)">
+<circle cx="70" cy="70" r="58" fill="#EFE4D6" stroke="#241E19" stroke-width="3.33"/>
+<g stroke="#241E19" stroke-width="3.33">
+<path d="M70 4 L70 12"/>
+<path d="M70 128 L70 136"/>
+<path d="M128 70 L136 70"/>
+<path d="M4 70 L12 70"/>
+</g>
+<g stroke="#241E19" stroke-width="6.5" fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+<path d="M44.25 48 L44.25 76"/>
+<path d="M66 48 L47 62 L66 76"/>
+<path d="M87 48 L87 76"/>
+<path d="M75 51.25 L99 51.25"/>
+</g>
+<rect x="46" y="86" width="48" height="6" fill="#F59F0A"/>
+</g>
+<text x="100" y="50" font-family="'Bricolage Grotesque','Hind',system-ui,sans-serif" font-size="32" font-weight="700" letter-spacing="-0.4" fill="#241E19">Kiran Traders</text>
+<text x="101" y="71" font-family="'Hind',system-ui,sans-serif" font-size="11" font-weight="600" letter-spacing="2" fill="#6B5B4E">WHOLESALE PACKAGING &#183; LUCKNOW</text>
+</svg>

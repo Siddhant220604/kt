@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Sheet, SheetContent, SheetTrigger } from './ui/sheet';
 import { Badge } from './ui/badge';
+import LogoMark from './LogoMark';
 import { useCart } from '../lib/cart';
 import { useWishlist } from '../lib/wishlist';
 import { useTheme } from '../lib/theme';
@@ -52,7 +53,7 @@ const Header = () => {
             </SheetTrigger>
             <SheetContent side="left" className="w-72">
               <Link to="/" className="flex items-center gap-2 font-display font-bold text-xl" onClick={() => setOpen(false)}>
-                <span className="h-9 w-9 rounded-xl bg-primary text-primary-foreground grid place-items-center">KT</span>
+                <LogoMark className="h-9 w-9 shrink-0" />
                 <span>Kiran Traders</span>
               </Link>
               <form onSubmit={submit} className="mt-6">
@@ -72,7 +73,7 @@ const Header = () => {
           </Sheet>
 
           <Link to="/" data-testid="logo-link" className="flex items-center gap-2">
-            <span className="h-10 w-10 rounded-xl bg-primary text-primary-foreground grid place-items-center font-display font-bold">KT</span>
+            <LogoMark className="h-10 w-10 shrink-0" />
             <div className="leading-tight">
               <div className="font-display font-bold text-lg text-foreground">Kiran Traders</div>
               <div className="text-[10px] text-muted-foreground hidden sm:block">Since 1996 • Lucknow</div>
@@ -125,7 +126,7 @@ const Footer = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
           <div className="flex items-center gap-2 mb-3">
-            <span className="h-10 w-10 rounded-xl bg-primary text-primary-foreground grid place-items-center font-display font-bold">KT</span>
+            <LogoMark className="h-10 w-10 shrink-0" />
             <div className="font-display font-bold text-lg">Kiran Traders</div>
           </div>
           <p className="text-sm text-muted-foreground">Wholesale & Retail packaging essentials. Trusted in Lucknow since 1996.</p>

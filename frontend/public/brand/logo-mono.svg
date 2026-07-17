@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140" width="140" height="140" role="img" aria-labelledby="ktMonoTitle">
+<title id="ktMonoTitle">Kiran Traders</title>
+<circle cx="70" cy="70" r="58" fill="none" stroke="currentColor" stroke-width="2"/>
+<g stroke="currentColor" stroke-width="2">
+<path d="M70 4 L70 12"/>
+<path d="M70 128 L70 136"/>
+<path d="M128 70 L136 70"/>
+<path d="M4 70 L12 70"/>
+</g>
+<g stroke="currentColor" stroke-width="6.5" fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+<path d="M44.25 48 L44.25 76"/>
+<path d="M66 48 L47 62 L66 76"/>
+<path d="M87 48 L87 76"/>
+<path d="M75 51.25 L99 51.25"/>
+</g>
+<rect x="46" y="86" width="48" height="6" fill="currentColor"/>
+</svg>
