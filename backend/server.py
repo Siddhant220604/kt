@@ -1871,11 +1871,14 @@ async def forgot_customer_password(req: CustomerForgotPasswordIn, request: Reque
             try:
                 # password_reset is a Meta Authentication-category template - those have a
                 # fixed, Meta-controlled body (security disclaimer + expiry, no custom text or
-                # customer name), so the only variable is the code itself.
+                # customer name), so the only body variable is the code itself. Its Copy-Code
+                # button also needs that same code as a separate button parameter (see
+                # _build_template_components) or Meta rejects the send with #131008.
                 result = send_template_message(
                     phone,
                     WHATSAPP_TEMPLATE_PASSWORD_RESET,
                     body_parameters=[otp],
+                    button_parameter=otp,
                     config=config,
                 )
                 record_whatsapp_message_sent(result, template=WHATSAPP_TEMPLATE_PASSWORD_RESET, customer_id=c['id'])

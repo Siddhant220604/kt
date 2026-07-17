@@ -27,6 +27,7 @@ WHATSAPP_TEMPLATE_PARAM_COUNTS: Dict[str, int] = {
     'order_cancelled': 3,
     'invoice_ready': 3,
     'review_request': 2,
+    'password_reset': 1,
 }
 
 
@@ -130,6 +131,7 @@ def send_text_message(config: WhatsAppConfig, to_number: str, text: str) -> Dict
 def _build_template_components(
     body_parameters: Optional[List[Any]] = None,
     header_document: Optional[Dict[str, str]] = None,
+    button_parameter: Optional[str] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """Builds the `components` array of a WhatsApp template payload.
 
@@ -137,6 +139,12 @@ def _build_template_components(
       (e.g. the invoice_ready template's PDF attachment).
     - body_parameters, if given, becomes a `body` component with one text parameter per
       value, in the same order as the template's {{1}}, {{2}}, ... placeholders.
+    - button_parameter, if given, becomes a `button` component at index 0 with sub_type
+      "url". Meta's Authentication-category templates implement their "Copy Code" button as
+      a url-type button under the hood (an autofill deep link), so it still requires its own
+      text parameter - the OTP - even though the body already carries the same value. Omitting
+      this on a template that has such a button fails with #131008 "Button at index 0 of type
+      Url requires a parameter".
     """
     components: List[Dict[str, Any]] = []
     if header_document:
@@ -155,6 +163,13 @@ def _build_template_components(
             'type': 'body',
             'parameters': [{'type': 'text', 'text': str(value)} for value in body_parameters],
         })
+    if button_parameter is not None:
+        components.append({
+            'type': 'button',
+            'sub_type': 'url',
+            'index': '0',
+            'parameters': [{'type': 'text', 'text': str(button_parameter)}],
+        })
     return components or None
 
 
@@ -165,6 +180,7 @@ def send_template_message(
     header_document: Optional[Dict[str, str]] = None,
     config: Optional[WhatsAppConfig] = None,
     language_code: str = DEFAULT_TEMPLATE_LANGUAGE_CODE,
+    button_parameter: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Reusable helper for sending an approved Meta WhatsApp Utility Template message.
 
@@ -186,6 +202,9 @@ def send_template_message(
         config: WhatsAppConfig to reuse if the caller already has one; defaults to
             get_whatsapp_config() so existing call sites don't need to fetch it themselves.
         language_code: template language code; defaults to "en" per the approved templates.
+        button_parameter: OTP value for templates with a Copy-Code button (currently only
+            password_reset). See _build_template_components for why this is needed in addition
+            to body_parameters.
 
     Returns:
         The parsed Graph API JSON response, or None if the send was skipped (WhatsApp not
@@ -218,7 +237,7 @@ def send_template_message(
             'language': {'code': language_code},
         }
     }
-    components = _build_template_components(body_parameters, header_document)
+    components = _build_template_components(body_parameters, header_document, button_parameter)
     if components:
         payload['template']['components'] = components
 
