@@ -45,7 +45,13 @@ export default function SignIn() {
           <p className="text-sm text-muted-foreground text-center mt-1">Log in to continue to checkout and view your orders.</p>
           <div className="mt-5 space-y-3">
             <div><Label className="text-xs text-muted-foreground">Email</Label><Input required type="email" autoComplete="off" value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} data-testid="signin-email-input" /></div>
-            <div><Label className="text-xs text-muted-foreground">Password</Label><PasswordInput required autoComplete="off" value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} data-testid="signin-password-input" /></div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Password</Label>
+              <PasswordInput required autoComplete="off" value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} data-testid="signin-password-input" />
+              <div className="text-right mt-1">
+                <Link to="/forgot-password" className="text-xs text-primary hover:underline" data-testid="signin-forgot-password-link">Forgot password?</Link>
+              </div>
+            </div>
             <Button type="submit" className="w-full" disabled={loading} data-testid="signin-submit">{loading ? 'Signing in...' : 'Sign in'}</Button>
           </div>
           <p className="text-sm text-center text-muted-foreground mt-4">

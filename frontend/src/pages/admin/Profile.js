@@ -117,7 +117,7 @@ export default function AdminProfile() {
               <div className="flex items-center gap-2 text-sm font-semibold"><Clock3 className="h-4 w-4" /> Recent logins</div>
               <div className="text-xs text-muted-foreground">Last 50</div>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
               {loginHistory.length === 0 && <div className="rounded-xl border border-border p-4 text-sm text-muted-foreground">No recent login activity found.</div>}
               {loginHistory.map((item) => (
                 <div key={item.id} className="rounded-xl border border-border p-4">

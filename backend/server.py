@@ -23,6 +23,7 @@ import base64
 import time
 import qrcode
 import requests
+import secrets
 from PIL import Image as PILImage
 
 import auth
@@ -200,7 +201,7 @@ async def generate_invoice_number() -> str:
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
-    return f"{fy_label}/{doc['seq']:04d}"
+    return f"KT-OL{fy_label}/{doc['seq']:04d}"
 
 
 async def get_or_assign_invoice_number(order: Dict[str, Any]) -> str:
@@ -580,6 +581,16 @@ class SavedAddressUpdate(BaseModel):
 class CustomerPasswordChange(BaseModel):
     model_config = ConfigDict(extra='forbid')
     current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=6, max_length=100)
+
+class CustomerForgotPasswordIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    email: EmailStr
+
+class CustomerResetPasswordIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    email: EmailStr
+    otp: str = Field(pattern=r'^\d{6}$')
     new_password: str = Field(min_length=6, max_length=100)
 
 class WishlistMerge(BaseModel):
@@ -1835,6 +1846,77 @@ async def customer_login(req: CustomerLoginIn, request: Request):
     return {'token': token, 'name': c.get('name', ''), 'email': email}
 
 
+RESET_OTP_EXPIRE_MINUTES = 10
+RESET_OTP_MAX_ATTEMPTS = 5
+
+
+@api_router.post('/customer/auth/forgot-password')
+async def forgot_customer_password(req: CustomerForgotPasswordIn, request: Request):
+    email = req.email.lower()
+    # Same IP+account backoff as login/signup, keyed by email - stops this endpoint being used to
+    # spam a registered mobile number with OTPs or to enumerate which emails have an account.
+    dependencies.check_auth_rate_limit(request, 'forgot_password', email)
+    c = await db.customers.find_one({'email': email})
+    if c:
+        otp = f"{secrets.randbelow(1_000_000):06d}"
+        await db.customers.update_one({'id': c['id']}, {'$set': {
+            'reset_otp_hash': auth.hash_password(otp),
+            'reset_otp_expires_at': (datetime.now(timezone.utc) + timedelta(minutes=RESET_OTP_EXPIRE_MINUTES)).isoformat(),
+            'reset_otp_attempts': 0,
+        }})
+        mobile = str(c.get('mobile') or '').strip()
+        phone = build_whatsapp_number(mobile, WHATSAPP_DEFAULT_COUNTRY_CODE) if mobile else None
+        config = get_whatsapp_config()
+        if phone and config.is_valid:
+            try:
+                # password_reset is a Meta Authentication-category template - those have a
+                # fixed, Meta-controlled body (security disclaimer + expiry, no custom text or
+                # customer name), so the only variable is the code itself.
+                result = send_template_message(
+                    phone,
+                    WHATSAPP_TEMPLATE_PASSWORD_RESET,
+                    body_parameters=[otp],
+                    config=config,
+                )
+                record_whatsapp_message_sent(result, template=WHATSAPP_TEMPLATE_PASSWORD_RESET, customer_id=c['id'])
+            except Exception:
+                logger.exception('Failed to send password reset WhatsApp OTP for customer %s', c['id'])
+        else:
+            logger.warning('Password reset OTP not sent: WhatsApp not configured or no valid mobile for customer %s', c['id'])
+    # Always the same generic response whether or not the email matched, so this endpoint can't
+    # be used to enumerate registered accounts.
+    return {'message': 'If an account with that email exists, a reset code has been sent via WhatsApp.'}
+
+
+@api_router.post('/customer/auth/reset-password')
+async def reset_customer_password(req: CustomerResetPasswordIn, request: Request):
+    email = req.email.lower()
+    dependencies.check_auth_rate_limit(request, 'reset_password', email)
+    c = await db.customers.find_one({'email': email})
+    otp_hash = (c or {}).get('reset_otp_hash')
+    expires_at = (c or {}).get('reset_otp_expires_at')
+    attempts = (c or {}).get('reset_otp_attempts', 0)
+    valid = bool(
+        c and otp_hash and expires_at
+        and attempts < RESET_OTP_MAX_ATTEMPTS
+        and datetime.fromisoformat(expires_at) > datetime.now(timezone.utc)
+        and auth.verify_password(req.otp, otp_hash)
+    )
+    if not valid:
+        if c:
+            await db.customers.update_one({'id': c['id']}, {'$inc': {'reset_otp_attempts': 1}})
+        dependencies.record_auth_failure(request, 'reset_password', email)
+        raise HTTPException(status_code=400, detail='Invalid or expired reset code')
+    dependencies.clear_auth_attempts(request, 'reset_password', email)
+    new_version = c.get('token_version', 0) + 1
+    await db.customers.update_one({'id': c['id']}, {
+        '$set': {'password_hash': auth.hash_password(req.new_password), 'token_version': new_version},
+        '$unset': {'reset_otp_hash': '', 'reset_otp_expires_at': '', 'reset_otp_attempts': ''},
+    })
+    token = create_token(c['id'], email, 'customer', new_version, expires_delta=timedelta(days=CUSTOMER_TOKEN_EXPIRE_DAYS))
+    return {'token': token, 'name': c.get('name', ''), 'email': email}
+
+
 @api_router.get('/customer/auth/me')
 async def customer_me(payload: Dict = Depends(dependencies.require_customer)):
     c = await db.customers.find_one({'id': payload['sub']}, {'_id': 0, 'password_hash': 0})
@@ -2501,6 +2583,8 @@ async def delete_question(qid: str, request: Request, payload: Dict = Depends(re
 # English) before it will deliver - suggested body wording (keep the 3 {{n}} variables in this
 # order): "Hi {{1}}, your payment for order {{2}} (Rs. {{3}}) didn't go through. Your items are
 # still reserved - tap below to try again. Need help? Just reply here."
+#   password_reset:             [otp]  (Authentication category, not Utility - Meta's fixed
+#                                       body/security-disclaimer/expiry, no customer name)
 WHATSAPP_TEMPLATE_ORDER_PENDING = 'order_pending'
 WHATSAPP_TEMPLATE_ORDER_CONFIRMATION = 'order_confirmation'
 WHATSAPP_TEMPLATE_ORDER_PACKED = 'order_packed'
@@ -2510,6 +2594,7 @@ WHATSAPP_TEMPLATE_ORDER_CANCELLED = 'order_cancelled'
 WHATSAPP_TEMPLATE_INVOICE_READY = 'invoice_ready'
 WHATSAPP_TEMPLATE_REVIEW_REQUEST = 'review_request'
 WHATSAPP_TEMPLATE_PAYMENT_FAILED = 'payment_failed'
+WHATSAPP_TEMPLATE_PASSWORD_RESET = 'password_reset'
 
 # Order statuses that have an approved lifecycle template, used by send_order_status_update_whatsapp()
 # below. 'pending' is deliberately absent here - that notification is sent once, directly from order
@@ -3311,7 +3396,11 @@ async def list_audit_logs(
 def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     """Build a GST tax invoice PDF styled after the business's printed invoice-book format."""
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=9*mm, leftMargin=9*mm, topMargin=9*mm, bottomMargin=9*mm)
+    invoice_number_for_title = order.get('invoice_number') or order.get('id', '')
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4, rightMargin=9*mm, leftMargin=9*mm, topMargin=9*mm, bottomMargin=9*mm,
+        title=f'Invoice {invoice_number_for_title}',
+    )
 
     BLACK = colors.black
 
