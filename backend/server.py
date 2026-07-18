@@ -373,6 +373,12 @@ class ProductIn(BaseModel):
     short_description: Optional[str] = Field('', max_length=500)
     size: Optional[str] = Field('', max_length=50)
     unit: Optional[str] = Field('piece', max_length=30)
+    # Links this product to sibling size/variant products (e.g. "6mm"/"8mm" of the same item) so
+    # the product page can show a selector between them. Products sharing the same non-empty
+    # variant_group are treated as variants of one another; variant_label (e.g. "6mm") is what's
+    # shown on the selector button for this particular product.
+    variant_group: Optional[str] = Field('', max_length=100)
+    variant_label: Optional[str] = Field('', max_length=50)
     price: float = Field(gt=0, le=10_000_000)
     compare_price: Optional[float] = Field(0, ge=0, le=10_000_000)
     moq: int = Field(1, ge=1, le=100000)
@@ -1090,6 +1096,16 @@ async def get_product(pid: str, admin_payload: Optional[Dict] = Depends(dependen
         frequently_bought = [apply_flash_sale(r) for r in frequently_bought]
     p['related'] = related
     p['frequently_bought_together'] = frequently_bought
+    # variants: sibling products sharing the same variant_group (e.g. other sizes of this item)
+    if p.get('variant_group'):
+        variant_filter = {'variant_group': p['variant_group']}
+        if not admin_payload:
+            variant_filter['active'] = True
+        variants = await db.products.find(variant_filter, {'_id': 0, 'id': 1, 'slug': 1, 'name': 1, 'variant_label': 1, 'price': 1, 'stock': 1, 'images': 1}).to_list(50)
+        variants.sort(key=lambda v: v.get('variant_label') or '')
+        p['variants'] = variants
+    else:
+        p['variants'] = []
     return p
 
 @api_router.post('/products')

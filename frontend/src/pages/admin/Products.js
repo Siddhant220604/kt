@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import { toast } from 'sonner';
 
-const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '' };
+const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '', variant_group: '', variant_label: '' };
 
 const readFileAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
 
@@ -85,6 +85,8 @@ export default function AdminProducts() {
         sale_price: edit.sale_price ? Number(edit.sale_price) : null,
         sale_starts_at: edit.sale_starts_at || null,
         sale_ends_at: edit.sale_ends_at || null,
+        variant_group: edit.variant_group || '',
+        variant_label: edit.variant_label || '',
       };
       if (edit.id) { await api.put(`/products/${edit.id}`, payload); toast.success('Product updated'); }
       else { await api.post('/products', payload); toast.success('Product created'); }
@@ -223,6 +225,15 @@ export default function AdminProducts() {
                     <Button type="button" size="icon" variant="ghost" onClick={() => rmTier(i)} className="text-destructive shrink-0"><X className="h-4 w-4" /></Button>
                   </div>
                 ))}
+              </div>
+
+              <div>
+                <Label className="text-xs text-muted-foreground">Size Variants (optional)</Label>
+                <p className="text-xs text-muted-foreground mb-2">To show a size selector on the product page (like "6mm / 8mm"), give this product and its other sizes the same Variant Group. Each one keeps its own price, stock and images.</p>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div><Label className="text-xs text-muted-foreground">Variant Group</Label><Input value={edit.variant_group} onChange={(e) => setEdit({ ...edit, variant_group: e.target.value })} placeholder="e.g. eco-straws" /></div>
+                  <div><Label className="text-xs text-muted-foreground">This Product's Size Label</Label><Input value={edit.variant_label} onChange={(e) => setEdit({ ...edit, variant_label: e.target.value })} placeholder="e.g. 6 mm" /></div>
+                </div>
               </div>
 
               <div>

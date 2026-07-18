@@ -183,6 +183,31 @@ export default function ProductDetail() {
               )}
               {product.size && <div className="mt-2 text-sm"><span className="text-muted-foreground">Size:</span> <span className="font-medium">{product.size}</span></div>}
 
+              {product.variants && product.variants.length > 1 && (
+                <div className="mt-4">
+                  <div className="text-xs text-muted-foreground mb-1.5">Size: <span className="font-medium text-foreground">{product.variant_label || product.size}</span></div>
+                  <div className="flex flex-wrap gap-2">
+                    {product.variants.map(v => {
+                      const isActive = v.id === product.id;
+                      const outOfStock = (v.stock || 0) <= 0;
+                      return (
+                        <button
+                          key={v.id}
+                          type="button"
+                          disabled={isActive}
+                          onClick={() => navigate(`/products/${v.slug || v.id}`)}
+                          data-testid={`variant-${v.id}`}
+                          className={`rounded-lg border px-3 py-1.5 text-sm text-left min-w-[5.5rem] transition-colors ${isActive ? 'border-primary ring-1 ring-primary bg-primary/5' : 'border-border hover:border-primary/60'} ${outOfStock ? 'opacity-50' : ''}`}
+                        >
+                          <div className="font-medium">{v.variant_label || 'Option'}</div>
+                          <div className="text-xs text-muted-foreground">{formatINR(v.price)}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {hasTiers && (
                 <div className="mt-3 bg-muted/40 border border-border rounded-xl p-3 text-sm">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Bulk Pricing</div>
