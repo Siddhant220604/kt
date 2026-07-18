@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import { toast } from 'sonner';
 
-const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specs: {}, featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '', variant_group: '', variant_label: '' };
+const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specsList: [], featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '', variant_group: '', variant_label: '' };
 
 const readFileAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
 
@@ -39,7 +39,7 @@ export default function AdminProducts() {
   useEffect(() => { load(); }, [load]);
 
   const openNew = () => setEdit({ ...empty, category_id: cats[0]?.id || '' });
-  const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specs: p.specs || {}, tags: p.tags || [], price_tiers: p.price_tiers || [], sale_price: p.sale_price || '', sale_starts_at: p.sale_starts_at || '', sale_ends_at: p.sale_ends_at || '' });
+  const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specsList: Object.entries(p.specs || {}).map(([key, value]) => ({ key, value })), tags: p.tags || [], price_tiers: p.price_tiers || [], sale_price: p.sale_price || '', sale_starts_at: p.sale_starts_at || '', sale_ends_at: p.sale_ends_at || '' });
 
   // Deep-link support (e.g. from the dashboard's low-stock list): /admin/products?edit=<id>
   // opens straight into that product's edit dialog instead of requiring a manual search + click.
@@ -75,7 +75,7 @@ export default function AdminProducts() {
         moq: Number(edit.moq || 1),
         stock: Number(edit.stock || 0),
         images: (edit.images || []).filter(Boolean),
-        specs: edit.specs || {},
+        specs: Object.fromEntries((edit.specsList || []).filter(s => s.key.trim()).map(s => [s.key.trim(), s.value])),
         featured: edit.featured,
         active: edit.active,
         tags: edit.tags || [],
@@ -121,6 +121,10 @@ export default function AdminProducts() {
   const addTier = () => setEdit(e => ({ ...e, price_tiers: [...(e.price_tiers || []), { min_qty: '', price: '' }] }));
   const setTier = (i, field, v) => setEdit(e => ({ ...e, price_tiers: e.price_tiers.map((t, idx) => idx === i ? { ...t, [field]: v } : t) }));
   const rmTier = (i) => setEdit(e => ({ ...e, price_tiers: e.price_tiers.filter((_, idx) => idx !== i) }));
+
+  const addSpec = () => setEdit(e => ({ ...e, specsList: [...(e.specsList || []), { key: '', value: '' }] }));
+  const setSpec = (i, field, v) => setEdit(e => ({ ...e, specsList: e.specsList.map((s, idx) => idx === i ? { ...s, [field]: v } : s) }));
+  const rmSpec = (i) => setEdit(e => ({ ...e, specsList: e.specsList.filter((_, idx) => idx !== i) }));
 
   const addImage = () => setEdit(e => ({ ...e, images: [...(e.images || []), ''] }));
   const setImage = (i, v) => setEdit(e => ({ ...e, images: e.images.map((x, idx) => idx === i ? v : x) }));
@@ -247,6 +251,22 @@ export default function AdminProducts() {
               </div>
 
               <div><Label className="text-xs text-muted-foreground">Description</Label><Textarea rows={3} value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">Specifications (optional)</Label>
+                  <Button type="button" size="sm" variant="outline" onClick={addSpec} data-testid="admin-add-spec"><Plus className="h-3.5 w-3.5 mr-1" />Add spec</Button>
+                </div>
+                {(edit.specsList || []).length === 0 && <div className="text-xs text-muted-foreground mt-1">No specifications - the "Specifications" section won't show on the product page.</div>}
+                {(edit.specsList || []).map((s, i) => (
+                  <div key={i} className="flex items-center gap-2 mt-2">
+                    <Input placeholder="Label (e.g. Size)" value={s.key} onChange={(e) => setSpec(i, 'key', e.target.value)} data-testid={`admin-spec-key-${i}`} />
+                    <Input placeholder="Value (e.g. 20 inch)" value={s.value} onChange={(e) => setSpec(i, 'value', e.target.value)} data-testid={`admin-spec-value-${i}`} />
+                    <Button type="button" size="icon" variant="ghost" onClick={() => rmSpec(i)} className="text-destructive shrink-0"><X className="h-4 w-4" /></Button>
+                  </div>
+                ))}
+              </div>
+
               <div>
                 <Label className="text-xs text-muted-foreground">Images (URLs or upload)</Label>
                 <div className="space-y-2 mt-1">
