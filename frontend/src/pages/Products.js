@@ -41,6 +41,7 @@ export default function Products() {
     if (minPrice) params.min_price = Number(minPrice);
     if (maxPrice) params.max_price = Number(maxPrice);
     api.get('/products', { params }).then(r => setData(r.data)).finally(() => setLoading(false));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [search, category, sort, inStock, minPrice, maxPrice, page]);
 
   const updateParam = (k, v) => {
