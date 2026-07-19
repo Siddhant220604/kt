@@ -157,6 +157,9 @@ const Footer = () => {
                 <Link to={`/products?category=${c.id}`} className="hover:text-foreground">{c.name}</Link>
               </li>
             ))}
+            <li>
+              <Link to="/products" className="hover:text-foreground font-medium text-primary">View All Categories →</Link>
+            </li>
           </ul>
         </div>
         <div>
