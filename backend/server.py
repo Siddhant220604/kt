@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import io
 import re
+import math
 import base64
 import time
 import qrcode
@@ -692,6 +693,8 @@ class SettingsIn(BaseModel):
     sgst_rate: Optional[float] = Field(None, ge=0, le=50)
     shipping_flat: Optional[float] = Field(None, ge=0, le=100_000)
     free_shipping_above: Optional[float] = Field(None, ge=0, le=100_000_000)
+    shop_lat: Optional[float] = Field(None, ge=-90, le=90)
+    shop_lng: Optional[float] = Field(None, ge=-180, le=180)
 
     @field_validator('email', mode='before')
     @classmethod
@@ -1646,6 +1649,157 @@ def effective_unit_price(product: Dict[str, Any], quantity: int) -> float:
     return price
 
 
+# ------------------ DELIVERY CHARGE ------------------
+
+DELIVERY_RATE_PER_KM = 20.0
+MAX_DELIVERY_RADIUS_KM = 25.0
+GOOGLE_MAPS_TIMEOUT = 5
+GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
+DELIVERY_UNAVAILABLE_MESSAGE = 'Sorry, we currently only deliver within Lucknow. Please enter a Lucknow address to continue.'
+
+
+class DeliveryEstimateIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    address_line1: str = Field('', max_length=300)
+    address_line2: Optional[str] = Field('', max_length=300)
+    city: str = Field('', max_length=100)
+    state: str = Field('', max_length=100)
+    pincode: str = Field('', max_length=10)
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(min(1.0, a)))
+
+
+def _format_full_address(address) -> str:
+    parts = [address.address_line1, address.address_line2, address.city, address.state, address.pincode, 'India']
+    return ', '.join(p for p in parts if p)
+
+
+async def _geocode_address(full_address: str) -> Optional[Dict[str, Any]]:
+    """Resolve an address string to {lat, lng, city} via the Google Geocoding API.
+    Returns None on any failure (missing key, timeout, error status, network issue)."""
+    if not GOOGLE_MAPS_API_KEY:
+        return None
+    try:
+        resp = await asyncio.to_thread(
+            requests.get,
+            'https://maps.googleapis.com/maps/api/geocode/json',
+            params={'address': full_address, 'key': GOOGLE_MAPS_API_KEY, 'region': 'in'},
+            timeout=GOOGLE_MAPS_TIMEOUT,
+        )
+        data = resp.json()
+        if data.get('status') != 'OK' or not data.get('results'):
+            return None
+        result = data['results'][0]
+        loc = result['geometry']['location']
+        city = ''
+        for comp in result.get('address_components', []):
+            types = comp.get('types', [])
+            if 'locality' in types or 'postal_town' in types or 'administrative_area_level_2' in types:
+                city = comp.get('long_name', '')
+                break
+        return {'lat': loc['lat'], 'lng': loc['lng'], 'city': city}
+    except Exception:
+        logger.warning('Geocoding request failed for address: %s', full_address, exc_info=True)
+        return None
+
+
+async def _driving_distance_km(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> Optional[float]:
+    """Driving distance in km via the Google Distance Matrix API. Returns None on any failure."""
+    if not GOOGLE_MAPS_API_KEY:
+        return None
+    try:
+        resp = await asyncio.to_thread(
+            requests.get,
+            'https://maps.googleapis.com/maps/api/distancematrix/json',
+            params={
+                'origins': f'{origin_lat},{origin_lng}',
+                'destinations': f'{dest_lat},{dest_lng}',
+                'mode': 'driving',
+                'key': GOOGLE_MAPS_API_KEY,
+            },
+            timeout=GOOGLE_MAPS_TIMEOUT,
+        )
+        data = resp.json()
+        if data.get('status') != 'OK':
+            return None
+        element = data['rows'][0]['elements'][0]
+        if element.get('status') != 'OK':
+            return None
+        return element['distance']['value'] / 1000.0
+    except Exception:
+        logger.warning('Distance Matrix request failed for (%s,%s) -> (%s,%s)', origin_lat, origin_lng, dest_lat, dest_lng, exc_info=True)
+        return None
+
+
+async def calculate_delivery_charge(address) -> Dict[str, Any]:
+    """Calculate the distance-based delivery charge for an address, enforcing the
+    Lucknow-only + 25km-radius delivery restriction. `address` needs address_line1,
+    address_line2, city, state, pincode attributes (AddressIn or DeliveryEstimateIn)."""
+    settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    shop_lat = settings.get('shop_lat')
+    shop_lng = settings.get('shop_lng')
+    shipping_flat = settings.get('shipping_flat', 0.0) or 0.0
+
+    if shop_lat is None or shop_lng is None:
+        logger.warning('Shop coordinates not configured in settings - falling back to flat shipping')
+        return {'distance_km': 0.0, 'shipping': shipping_flat, 'delivery_allowed': True, 'reason': None, 'used_fallback': True}
+
+    full_address = _format_full_address(address)
+    geocode = await _geocode_address(full_address)
+    if geocode is None:
+        logger.warning('Falling back to flat shipping - could not geocode address: %s', full_address)
+        return {'distance_km': 0.0, 'shipping': shipping_flat, 'delivery_allowed': True, 'reason': None, 'used_fallback': True}
+
+    dest_lat, dest_lng = geocode['lat'], geocode['lng']
+    resolved_city = (geocode.get('city') or '').strip().lower()
+    straight_line_km = _haversine_km(shop_lat, shop_lng, dest_lat, dest_lng)
+
+    if 'lucknow' not in resolved_city or straight_line_km > MAX_DELIVERY_RADIUS_KM:
+        return {
+            'distance_km': round(straight_line_km, 2),
+            'shipping': 0.0,
+            'delivery_allowed': False,
+            'reason': DELIVERY_UNAVAILABLE_MESSAGE,
+            'used_fallback': False,
+        }
+
+    used_fallback = False
+    driving_km = await _driving_distance_km(shop_lat, shop_lng, dest_lat, dest_lng)
+    if driving_km is None:
+        used_fallback = True
+        distance_km = straight_line_km
+        logger.warning('Falling back to Haversine distance for delivery charge - Distance Matrix API call failed for address: %s', full_address)
+    else:
+        distance_km = driving_km
+
+    billed_km = math.ceil(distance_km) if distance_km > 0 else 0
+    shipping = round(billed_km * DELIVERY_RATE_PER_KM, 2)
+
+    return {
+        'distance_km': round(distance_km, 2),
+        'shipping': shipping,
+        'delivery_allowed': True,
+        'reason': None,
+        'used_fallback': used_fallback,
+    }
+
+
+@api_router.post('/delivery/estimate')
+async def estimate_delivery(req: DeliveryEstimateIn, request: Request):
+    # Public tier limit - this is an unauthenticated endpoint hit live while the customer types.
+    dependencies.check_rate_limit(request, 'delivery_estimate', *rate_limits.get_bucket_limit('delivery_estimate', 30, 60))
+    if not req.address_line1 or not req.city or not req.pincode:
+        raise HTTPException(status_code=400, detail='address_line1, city and pincode are required')
+    return await calculate_delivery_charge(req)
+
+
 @api_router.post('/orders')
 async def create_order(order: OrderIn, background_tasks: BackgroundTasks, request: Request, payload: Dict = Depends(dependencies.require_customer)):
     dependencies.check_authenticated_rate_limit(request, 'create_order', payload['sub'])
@@ -1692,11 +1846,18 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
     cgst_rate = settings.get('cgst_rate', 0.0)
     sgst_rate = settings.get('sgst_rate', 0.0)
     tax_rate = cgst_rate + sgst_rate
-    shipping_flat = settings.get('shipping_flat', 0.0)
     free_ship_above = settings.get('free_shipping_above', 0.0)
     taxable = max(0.0, subtotal - discount)
     tax = round(taxable * (tax_rate / 100.0), 2) if tax_rate else 0.0
-    shipping = 0.0 if (free_ship_above and taxable >= free_ship_above) else shipping_flat
+
+    # Distance-based delivery charge, checked (and can reject the order) before any stock or
+    # coupon reservation happens below - a customer must never be charged/reserved against and
+    # then told delivery isn't available at their address.
+    delivery = await calculate_delivery_charge(order.address)
+    if not delivery['delivery_allowed']:
+        raise HTTPException(status_code=400, detail=delivery['reason'])
+    distance_km = delivery['distance_km']
+    shipping = 0.0 if (free_ship_above and taxable >= free_ship_above) else delivery['shipping']
     total = round(taxable + tax + shipping, 2)
     oid = gen_order_id()
     # Invoice number is assigned at order placement (not lazily at first download) so it's
@@ -1725,6 +1886,7 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
         'cgst_rate': cgst_rate,
         'sgst_rate': sgst_rate,
         'shipping': shipping,
+        'distance_km': distance_km,
         'total': total,
         'status': 'pending',
         'status_history': [{'status': 'pending', 'at': now_iso(), 'note': 'Order placed'}],
@@ -3654,7 +3816,9 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     if igst > 0:
         total_rows.append([total_label(f'IGST @ {tax_rate:g}%'), *rp(igst)])
     if shipping > 0:
-        total_rows.append([total_label('Other Charges'), *rp(shipping)])
+        distance_km = order.get('distance_km') or 0
+        shipping_label = f'Delivery Charge ({distance_km:g} km)' if distance_km else 'Delivery Charge'
+        total_rows.append([total_label(shipping_label), *rp(shipping)])
     total_rows.append([total_label('TOTAL AMOUNT OF INVOICE', bold=True), *rp(grand_total)])
 
     n = len(total_rows)
@@ -3805,6 +3969,10 @@ async def seed_db():
             'sgst_rate': 0.0,
             'shipping_flat': 100.0,
             'free_shipping_above': 2000.0,
+            # Placeholder shop coordinates (Lucknow city center) - replace with the shop's exact
+            # location in Admin > Settings for accurate distance-based delivery pricing.
+            'shop_lat': 26.8467,
+            'shop_lng': 80.9462,
             'created_at': now_iso(),
         })
         logger.info('Seeded settings')

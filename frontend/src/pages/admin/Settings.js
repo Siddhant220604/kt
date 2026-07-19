@@ -33,6 +33,8 @@ export default function AdminSettings() {
         sgst_rate: Number(form.sgst_rate || 0),
         shipping_flat: Number(form.shipping_flat || 0),
         free_shipping_above: Number(form.free_shipping_above || 0),
+        shop_lat: Number(form.shop_lat || 0),
+        shop_lng: Number(form.shop_lng || 0),
       });
       toast.success('Settings saved'); reload();
     } catch (e) { toast.error('Save failed'); }
@@ -67,8 +69,16 @@ export default function AdminSettings() {
         <div className="grid sm:grid-cols-4 gap-3">
           <div><Label>CGST Rate (%)</Label><Input type="number" value={form.cgst_rate ?? ''} onChange={(e) => upd('cgst_rate', e.target.value)} /></div>
           <div><Label>SGST Rate (%)</Label><Input type="number" value={form.sgst_rate ?? ''} onChange={(e) => upd('sgst_rate', e.target.value)} /></div>
-          <div><Label>Shipping (Flat)</Label><Input type="number" value={form.shipping_flat ?? ''} onChange={(e) => upd('shipping_flat', e.target.value)} /></div>
+          <div><Label>Shipping (Flat fallback)</Label><Input type="number" value={form.shipping_flat ?? ''} onChange={(e) => upd('shipping_flat', e.target.value)} /></div>
           <div><Label>Free shipping above</Label><Input type="number" value={form.free_shipping_above ?? ''} onChange={(e) => upd('free_shipping_above', e.target.value)} /></div>
+        </div>
+      </div>
+      <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
+        <div className="font-display font-semibold">Shop Location (for distance-based delivery)</div>
+        <p className="text-xs text-muted-foreground">Used to calculate delivery charges (₹20/km driving distance) and to enforce the Lucknow-only, 25km delivery radius. Get exact coordinates from Google Maps (right-click a location → the lat/lng shown at the top).</p>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div><Label>Shop Latitude</Label><Input type="number" step="any" value={form.shop_lat ?? ''} onChange={(e) => upd('shop_lat', e.target.value)} /></div>
+          <div><Label>Shop Longitude</Label><Input type="number" step="any" value={form.shop_lng ?? ''} onChange={(e) => upd('shop_lng', e.target.value)} /></div>
         </div>
       </div>
       <div><Button onClick={save} disabled={saving} data-testid="admin-settings-save">{saving ? 'Saving...' : 'Save Settings'}</Button></div>

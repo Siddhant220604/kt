@@ -122,7 +122,7 @@ export default function AdminOrderDetail() {
             <div className="mt-3 pt-3 border-t border-border space-y-1 text-sm">
               <div className="flex justify-between"><span>Subtotal</span><span>{formatINR(order.subtotal)}</span></div>
               {order.discount > 0 && <div className="flex justify-between text-emerald-600"><span>Discount ({order.coupon_code})</span><span>-{formatINR(order.discount)}</span></div>}
-              {order.shipping > 0 && <div className="flex justify-between"><span>Shipping</span><span>{formatINR(order.shipping)}</span></div>}
+              {order.shipping > 0 && <div className="flex justify-between"><span>Shipping{order.distance_km ? ` (${order.distance_km} km)` : ''}</span><span>{formatINR(order.shipping)}</span></div>}
               <div className="flex justify-between font-display font-bold text-lg pt-1"><span>Total</span><span>{formatINR(order.total)}</span></div>
             </div>
           </div>

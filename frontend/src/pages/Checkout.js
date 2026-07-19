@@ -30,11 +30,43 @@ export default function Checkout() {
   const [loadingCoupons, setLoadingCoupons] = useState(false);
   const [addresses, setAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState('new');
-  const shipping = subtotal >= (settings.free_shipping_above || 2000) ? 0 : (settings.shipping_flat || 100);
+  const [deliveryEstimate, setDeliveryEstimate] = useState(null);
+  const [checkingDelivery, setCheckingDelivery] = useState(false);
+  const freeShipAbove = settings.free_shipping_above || 2000;
+  const deliveryBlocked = !!(deliveryEstimate && deliveryEstimate.delivery_allowed === false);
+  const shipping = deliveryEstimate && deliveryEstimate.delivery_allowed
+    ? (subtotal >= freeShipAbove ? 0 : deliveryEstimate.shipping)
+    : (subtotal >= freeShipAbove ? 0 : (settings.shipping_flat || 100));
   const taxable = Math.max(0, subtotal - discount);
   const cgst = settings.cgst_rate ? Math.round(taxable * (settings.cgst_rate / 100) * 100) / 100 : 0;
   const sgst = settings.sgst_rate ? Math.round(taxable * (settings.sgst_rate / 100) * 100) / 100 : 0;
-  const total = taxable + cgst + sgst + (items.length > 0 ? shipping : 0);
+  const total = taxable + cgst + sgst + (items.length > 0 && !deliveryBlocked ? shipping : 0);
+
+  // Live delivery-charge check as the address is filled in, so a customer sees the charge (or
+  // the "we don't deliver there" rejection) before submitting, not after. Debounced and
+  // best-effort - a failed/slow estimate call must never block the checkout page itself.
+  useEffect(() => {
+    if (!form.address_line1 || !form.city || !form.pincode || form.pincode.length < 6) {
+      setDeliveryEstimate(null);
+      setCheckingDelivery(false);
+      return;
+    }
+    setCheckingDelivery(true);
+    const t = setTimeout(async () => {
+      try {
+        const { data } = await api.post('/delivery/estimate', {
+          address_line1: form.address_line1, address_line2: form.address_line2 || '',
+          city: form.city, state: form.state, pincode: form.pincode,
+        });
+        setDeliveryEstimate(data);
+      } catch (err) {
+        setDeliveryEstimate(null);
+      } finally {
+        setCheckingDelivery(false);
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [form.address_line1, form.address_line2, form.city, form.state, form.pincode]);
 
   const loadRazorpayScript = () => new Promise((resolve, reject) => {
     if (window.Razorpay) return resolve();
@@ -145,6 +177,7 @@ export default function Checkout() {
     if (!/^[6-9]\d{9}$/.test(form.mobile)) return toast.error('Enter a valid 10-digit mobile number');
     if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return toast.error('Enter a valid email address');
     if (!form.pincode || form.pincode.length < 6) return toast.error('Enter a valid pincode');
+    if (deliveryBlocked) return toast.error(deliveryEstimate.reason || 'Delivery is not available at this address');
     setPlacing(true);
 
     let rzpOpened = false;
@@ -291,6 +324,15 @@ export default function Checkout() {
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">GST Number (optional)</Label><Input value={form.gst_number} onChange={(e) => upd('gst_number', e.target.value.toUpperCase())} placeholder="For GST invoice" /></div>
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Order notes (optional)</Label><Textarea rows={2} value={form.notes} onChange={(e) => upd('notes', e.target.value)} placeholder="Any delivery instructions?" /></div>
               </div>
+              {checkingDelivery && <div className="mt-3 text-xs text-muted-foreground">Checking delivery availability...</div>}
+              {deliveryBlocked && (
+                <div className="mt-3 text-sm text-red-600">{deliveryEstimate.reason}</div>
+              )}
+              {!checkingDelivery && deliveryEstimate && deliveryEstimate.delivery_allowed && (
+                <div className="mt-3 text-xs text-emerald-600">
+                  Delivery available{deliveryEstimate.distance_km ? ` · ${deliveryEstimate.distance_km} km away` : ''}
+                </div>
+              )}
             </div>
             {/* Payment */}
             <div className="bg-card border border-border rounded-2xl p-5 sm:p-6">
@@ -379,12 +421,18 @@ export default function Checkout() {
                 </div>
                 <div className="flex justify-between"><span>Subtotal</span><span>{formatINR(subtotal)}</span></div>
                 {discount > 0 && <div className="flex justify-between text-emerald-600"><span>Discount ({applied})</span><span>-{formatINR(discount)}</span></div>}
-                <div className="flex justify-between"><span>Shipping</span><span>{shipping === 0 ? 'FREE' : formatINR(shipping)}</span></div>
+                <div className="flex justify-between">
+                  <span>Shipping{deliveryEstimate?.delivery_allowed && deliveryEstimate.distance_km ? ` (${deliveryEstimate.distance_km} km)` : ''}</span>
+                  <span>{deliveryBlocked ? '—' : (shipping === 0 ? 'FREE' : formatINR(shipping))}</span>
+                </div>
                 {cgst > 0 && <div className="flex justify-between"><span>CGST ({settings.cgst_rate}%)</span><span>{formatINR(cgst)}</span></div>}
                 {sgst > 0 && <div className="flex justify-between"><span>SGST ({settings.sgst_rate}%)</span><span>{formatINR(sgst)}</span></div>}
                 <div className="border-t border-border pt-2 flex justify-between font-display font-bold text-lg"><span>Total</span><span data-testid="checkout-total">{formatINR(total)}</span></div>
               </div>
-              <Button type="submit" size="lg" className="w-full mt-4" disabled={placing} data-testid="place-order-button">
+              {deliveryBlocked && (
+                <div className="mt-3 text-xs text-red-600 text-center">{deliveryEstimate.reason}</div>
+              )}
+              <Button type="submit" size="lg" className="w-full mt-4" disabled={placing || deliveryBlocked} data-testid="place-order-button">
                 {placing ? (payment === 'online' ? 'Processing payment...' : 'Placing order...') : (payment === 'online' ? `Pay Now • ${formatINR(total)}` : `Place Order • ${formatINR(total)}`)}
               </Button>
               <div className="text-[10px] text-muted-foreground text-center mt-2">By placing the order, you agree to our terms.</div>
