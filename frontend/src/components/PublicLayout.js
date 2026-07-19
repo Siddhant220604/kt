@@ -10,6 +10,7 @@ import { useCart } from '../lib/cart';
 import { useWishlist } from '../lib/wishlist';
 import { useTheme } from '../lib/theme';
 import { useSettings } from '../lib/settings';
+import { api } from '../lib/api';
 
 const navLinks = [
   { to: '/', label: 'Home' },
@@ -121,6 +122,10 @@ const Header = () => {
 
 const Footer = () => {
   const { settings } = useSettings();
+  const [footerCats, setFooterCats] = useState([]);
+  useEffect(() => {
+    api.get('/categories').then(r => setFooterCats((r.data || []).slice(0, 5))).catch(() => {});
+  }, []);
   return (
     <footer className="mt-16 border-t border-border bg-muted/30">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 grid grid-cols-1 md:grid-cols-4 gap-8">
@@ -147,11 +152,11 @@ const Footer = () => {
         <div>
           <h4 className="font-display font-semibold mb-3">Categories</h4>
           <ul className="space-y-2 text-sm text-muted-foreground">
-            <li><Link to="/products" className="hover:text-foreground">Thermocol Plates</Link></li>
-            <li><Link to="/products" className="hover:text-foreground">Carry Bags</Link></li>
-            <li><Link to="/products" className="hover:text-foreground">Disposable Glasses</Link></li>
-            <li><Link to="/products" className="hover:text-foreground">Packaging Materials</Link></li>
-            <li><Link to="/products" className="hover:text-foreground">Luggage Bags</Link></li>
+            {footerCats.map(c => (
+              <li key={c.id}>
+                <Link to={`/products?category=${c.id}`} className="hover:text-foreground">{c.name}</Link>
+              </li>
+            ))}
           </ul>
         </div>
         <div>
