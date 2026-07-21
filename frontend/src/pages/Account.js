@@ -76,6 +76,10 @@ export default function Account() {
     if (!addrForm.pincode || addrForm.pincode.length !== 6) return toast.error('Enter a valid 6-digit pincode');
     setSavingAddr(true);
     try {
+      try {
+        const { data: check } = await api.get(`/pincode/${addrForm.pincode}/verify`);
+        if (check.valid === false) { toast.error('Enter a valid pincode - this pincode does not exist'); return; }
+      } catch { /* lookup unavailable - fail open, don't block saving the address */ }
       const { data } = editingId
         ? await api.put(`/customer/addresses/${editingId}`, addrForm)
         : await api.post('/customer/addresses', addrForm);

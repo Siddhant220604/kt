@@ -1710,6 +1710,32 @@ async def _geocode_address(full_address: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+async def _verify_indian_pincode(pincode: str) -> Optional[Dict[str, Any]]:
+    """Look up a 6-digit Indian PIN code via the India Post public API to confirm it's a real,
+    existing pincode (not just 6 digits). Returns {'found': True, 'city', 'state'} if it exists,
+    {'found': False} if the API confirms it doesn't, or None if the lookup itself failed (so
+    callers can fail open rather than blocking on an unreachable third-party API)."""
+    try:
+        resp = await asyncio.to_thread(
+            requests.get,
+            f'https://api.postalpincode.in/pincode/{pincode}',
+            timeout=GOOGLE_MAPS_TIMEOUT,
+        )
+        data = resp.json()
+        if not data or 'Status' not in data[0]:
+            return None
+        if data[0].get('Status') != 'Success':
+            return {'found': False}
+        offices = data[0].get('PostOffice') or []
+        if not offices:
+            return {'found': False}
+        office = offices[0]
+        return {'found': True, 'city': office.get('District', ''), 'state': office.get('State', '')}
+    except Exception:
+        logger.warning('Pincode verification request failed for %s', pincode, exc_info=True)
+        return None
+
+
 async def _driving_distance_km(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> Optional[float]:
     """Driving distance in km via the Google Distance Matrix API. Returns None on any failure."""
     if not GOOGLE_MAPS_API_KEY:
@@ -1789,6 +1815,21 @@ async def calculate_delivery_charge(address) -> Dict[str, Any]:
         'reason': None,
         'used_fallback': used_fallback,
     }
+
+
+@api_router.get('/pincode/{pincode}/verify')
+async def verify_pincode(pincode: str, request: Request):
+    # Public tier limit - hit live while the customer types, same shape as delivery_estimate.
+    dependencies.check_rate_limit(request, 'pincode_verify', *rate_limits.get_bucket_limit('pincode_verify', 30, 60))
+    if not re.fullmatch(INDIAN_PINCODE_REGEX, pincode):
+        raise HTTPException(status_code=400, detail='Pincode must be 6 digits')
+    info = await _verify_indian_pincode(pincode)
+    if info is None:
+        # Lookup unavailable - fail open so a third-party API outage never blocks checkout.
+        return {'valid': True, 'checked': False}
+    if not info['found']:
+        return {'valid': False, 'checked': True}
+    return {'valid': True, 'checked': True, 'city': info.get('city', ''), 'state': info.get('state', '')}
 
 
 @api_router.post('/delivery/estimate')
