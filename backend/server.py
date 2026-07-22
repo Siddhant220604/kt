@@ -467,6 +467,13 @@ class AddressIn(BaseModel):
             raise ValueError('We only deliver within Uttar Pradesh. Please enter "Uttar Pradesh" as the state.')
         return v
 
+    @field_validator('pincode')
+    @classmethod
+    def validate_pincode(cls, v: str) -> str:
+        if v not in LUCKNOW_PINCODES:
+            raise ValueError('Sorry, we do not deliver to this pincode. We only deliver within Lucknow.')
+        return v
+
 class OrderIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
     items: List[CartItem] = Field(min_length=1, max_length=200)
