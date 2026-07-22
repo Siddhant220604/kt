@@ -21,7 +21,7 @@ export default function AdminReviews() {
       <Tabs value={filter} onValueChange={setFilter}>
         <TabsList><TabsTrigger value="pending">Pending</TabsTrigger><TabsTrigger value="approved">Approved</TabsTrigger></TabsList>
       </Tabs>
-      <div className="space-y-3">
+      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
         {rows.map(r => (
           <div key={r.id} className="bg-card border border-border rounded-2xl p-4">
             <div className="flex items-start justify-between gap-3">

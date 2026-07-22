@@ -32,7 +32,7 @@ export default function AdminQuestions() {
       <Tabs value={filter} onValueChange={setFilter}>
         <TabsList><TabsTrigger value="pending">Pending</TabsTrigger><TabsTrigger value="answered">Answered</TabsTrigger></TabsList>
       </Tabs>
-      <div className="space-y-3">
+      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
         {rows.map(q => (
           <div key={q.id} className="bg-card border border-border rounded-2xl p-4">
             <div className="flex items-start justify-between gap-3">

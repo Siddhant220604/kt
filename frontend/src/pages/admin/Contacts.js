@@ -15,7 +15,7 @@ export default function AdminContacts() {
   return (
     <div className="space-y-4">
       <div><h1 className="text-2xl font-display font-bold">Contact Messages</h1><p className="text-sm text-muted-foreground">{rows.length} messages</p></div>
-      <div className="space-y-2">
+      <div className="space-y-2 max-h-[70vh] overflow-y-auto pr-1">
         {rows.map(m => (
           <div key={m.id} className={`bg-card border rounded-2xl p-4 ${m.read ? 'border-border' : 'border-primary/40'}`}>
             <div className="flex items-start justify-between gap-3">
