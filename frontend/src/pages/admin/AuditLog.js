@@ -6,6 +6,18 @@ import { Button } from '../../components/ui/button';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 
+// Timestamps are stored/returned in UTC - audit log readers are IST-based admins, so render
+// in Asia/Kolkata rather than the raw UTC string (which reads ~5:30 "behind" what happened).
+const formatIST = (isoUtc) => {
+  if (!isoUtc) return '';
+  const d = new Date(isoUtc);
+  if (Number.isNaN(d.getTime())) return isoUtc;
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).replace(/(\d{2})\/(\d{2})\/(\d{4}),?/, '$3-$2-$1');
+};
+
 export default function AdminAuditLog() {
   const [sp, setSp] = useSearchParams();
   const action = sp.get('action') || 'all';
@@ -52,7 +64,7 @@ export default function AdminAuditLog() {
                 data.items.length === 0 ? <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">No audit entries</td></tr> :
                 data.items.map(a => (
                   <tr key={a.id} className="border-t border-border hover:bg-muted/30 align-top">
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{a.timestamp?.replace('T', ' ').slice(0, 19)}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{formatIST(a.timestamp)}</td>
                     <td className="py-2.5">{a.admin_email}</td>
                     <td className="py-2.5"><Badge variant="outline">{a.action?.replace(/_/g, ' ')}</Badge></td>
                     <td className="py-2.5 font-mono text-xs">{a.document_id}</td>
