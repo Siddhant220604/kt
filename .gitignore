@@ -30,11 +30,10 @@ next-env.d.ts
 dist/
 dist
 
-# Environment files (comprehensive coverage)
+# Environment files (comprehensive coverage) - all .env* files ignored, no exceptions
 .env
-.env.local
-.env.*.local
-!.env.example
+.env.*
+*.env
 *token.json*
 *credentials.json*
 
@@ -86,10 +85,6 @@ android-sdk/frontend/node_modules/.cache/default-development/3.pack
 frontend/node_modules/.cache/default-development/0.pack
 frontend/node_modules/.cache/default-development/5.pack
 frontend/node_modules/.cache/default-development/7.pack
-.env
-.env.*
-*.env
-!.env.example
 credentials.json
 *.key
 .credentials
