@@ -21,9 +21,9 @@ export default function AdminCustomers() {
         <Button variant="outline" className="gap-2" onClick={exportCsv} data-testid="admin-customers-export"><Download className="h-4 w-4" />Export CSV</Button>
       </div>
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40"><tr><th className="px-4 py-2.5">Name</th><th>Mobile</th><th>Email</th><th>City</th><th>Orders</th><th>Total Spent</th><th>Last Order</th></tr></thead>
+            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40 sticky top-0 z-10"><tr><th className="px-4 py-2.5">Name</th><th>Mobile</th><th>Email</th><th>City</th><th>Orders</th><th>Total Spent</th><th>Last Order</th></tr></thead>
             <tbody>
               {rows.map(c => (
                 <tr key={c.mobile} className="border-t border-border hover:bg-muted/30">
