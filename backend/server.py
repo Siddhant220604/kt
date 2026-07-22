@@ -1048,7 +1048,7 @@ async def list_products(
         docs = [apply_flash_sale(d) for d in docs]
     return {'items': docs, 'total': total, 'page': page, 'limit': limit, 'pages': max(1, (total + limit - 1) // limit)}
 
-PRODUCT_CSV_COLUMNS = ['id', 'name', 'category', 'description', 'short_description', 'size', 'unit', 'price', 'compare_price', 'moq', 'stock', 'images', 'tags', 'featured', 'active']
+PRODUCT_CSV_COLUMNS = ['id', 'name', 'category', 'description', 'short_description', 'size', 'unit', 'variant_group', 'variant_label', 'price', 'compare_price', 'moq', 'stock', 'images', 'tags', 'featured', 'active']
 MAX_IMPORT_ROWS = 2000
 
 # Registered ahead of the /products/{pid} route below - both are literal path segments, not
@@ -1065,6 +1065,7 @@ async def export_products(_: Dict = Depends(require_admin)):
         writer.writerow([security.csv_safe(v) for v in [
             d.get('id', ''), d.get('name', ''), cats.get(d.get('category_id'), ''),
             d.get('description', ''), d.get('short_description', ''), d.get('size', ''), d.get('unit', ''),
+            d.get('variant_group', ''), d.get('variant_label', ''),
             d.get('price', 0), d.get('compare_price', 0), d.get('moq', 1), d.get('stock', 0),
             ';'.join(d.get('images') or []), ';'.join(d.get('tags') or []),
             d.get('featured', False), d.get('active', True),
@@ -1078,7 +1079,7 @@ async def product_import_template(_: Dict = Depends(require_admin)):
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(PRODUCT_CSV_COLUMNS)
-    writer.writerow(['', 'Sample Product', 'Packaging', 'Full description here', 'Short blurb', '500g', 'piece', '99', '129', '1', '100', 'https://example.com/img1.jpg;https://example.com/img2.jpg', 'eco;bulk', 'false', 'true'])
+    writer.writerow(['', 'Sample Product', 'Packaging', 'Full description here', 'Short blurb', '500g', 'piece', '', '', '99', '129', '1', '100', 'https://example.com/img1.jpg;https://example.com/img2.jpg', 'eco;bulk', 'false', 'true'])
     return Response(content=buf.getvalue(), media_type='text/csv', headers={
         'Content-Disposition': 'attachment; filename=products-import-template.csv'
     })
@@ -1206,6 +1207,8 @@ async def import_products(request: Request, payload: Dict = Depends(require_admi
                 short_description=row.get('short_description') or '',
                 size=row.get('size') or '',
                 unit=row.get('unit') or 'piece',
+                variant_group=row.get('variant_group') or '',
+                variant_label=row.get('variant_label') or '',
                 price=float(row.get('price') or 0),
                 compare_price=float(row.get('compare_price') or 0),
                 moq=int(float(row.get('moq') or 1)),

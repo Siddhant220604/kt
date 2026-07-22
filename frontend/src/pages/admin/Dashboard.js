@@ -55,17 +55,36 @@ export default function AdminDashboard() {
       </div>
       <div className="grid lg:grid-cols-3 gap-4">
         {[
-          { label: 'Pending', val: stats.pending_orders, color: 'bg-amber-500/10 text-amber-700 border-amber-500/20' },
-          { label: 'Confirmed', val: stats.confirmed_orders, color: 'bg-sky-500/10 text-sky-700 border-sky-500/20' },
-          { label: 'Out for Delivery', val: stats.out_for_delivery_orders, color: 'bg-purple-500/10 text-purple-700 border-purple-500/20' },
-          { label: 'Delivered', val: stats.delivered_orders, color: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20' },
-          { label: 'Low Stock', val: stats.low_stock, color: 'bg-red-500/10 text-red-700 border-red-500/20' },
-        ].map(k => (
-          <div key={k.label} className="bg-card border border-border rounded-xl p-3 flex items-center justify-between">
-            <div className="text-sm">{k.label}</div>
-            <Badge variant="outline" className={k.color}>{k.val}</Badge>
-          </div>
-        ))}
+          { label: 'Pending', val: stats.pending_orders, color: 'bg-amber-500/10 text-amber-700 border-amber-500/20', orderStatus: 'pending' },
+          { label: 'Confirmed', val: stats.confirmed_orders, color: 'bg-sky-500/10 text-sky-700 border-sky-500/20', orderStatus: 'confirmed' },
+          { label: 'Out for Delivery', val: stats.out_for_delivery_orders, color: 'bg-purple-500/10 text-purple-700 border-purple-500/20', orderStatus: 'out for delivery' },
+          { label: 'Delivered', val: stats.delivered_orders, color: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', orderStatus: 'delivered' },
+          { label: 'Low Stock', val: stats.low_stock, color: 'bg-red-500/10 text-red-700 border-red-500/20', anchor: 'low-stock-products' },
+        ].map(k => {
+          const cardClass = 'bg-card border border-border rounded-xl p-3 flex items-center justify-between cursor-pointer hover:border-primary transition-colors';
+          const inner = (
+            <>
+              <div className="text-sm">{k.label}</div>
+              <Badge variant="outline" className={k.color}>{k.val}</Badge>
+            </>
+          );
+          if (k.orderStatus) {
+            return <Link key={k.label} to={`/admin/orders?status=${encodeURIComponent(k.orderStatus)}`} className={cardClass}>{inner}</Link>;
+          }
+          if (k.anchor && k.val > 0) {
+            return (
+              <a
+                key={k.label}
+                href={`#${k.anchor}`}
+                onClick={(e) => { e.preventDefault(); document.getElementById(k.anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                className={cardClass}
+              >
+                {inner}
+              </a>
+            );
+          }
+          return <div key={k.label} className="bg-card border border-border rounded-xl p-3 flex items-center justify-between">{inner}</div>;
+        })}
       </div>
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="bg-card border border-border rounded-2xl p-4">
@@ -98,7 +117,7 @@ export default function AdminDashboard() {
         </div>
       </div>
       {stats.low_stock_products?.length > 0 && (
-        <div className="bg-card border border-border rounded-2xl p-4">
+        <div id="low-stock-products" className="bg-card border border-border rounded-2xl p-4 scroll-mt-24">
           <div className="flex items-center justify-between mb-3">
             <div className="font-display font-semibold flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-red-600" />Low Stock Products</div>
             <Link to="/admin/products" className="text-xs text-primary hover:underline">View all products</Link>
