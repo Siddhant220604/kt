@@ -8,14 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 
 // Timestamps are stored/returned in UTC - audit log readers are IST-based admins, so render
 // in Asia/Kolkata rather than the raw UTC string (which reads ~5:30 "behind" what happened).
-const formatIST = (isoUtc) => {
-  if (!isoUtc) return '';
+const istParts = (isoUtc) => {
+  if (!isoUtc) return { date: '', time: '' };
   const d = new Date(isoUtc);
-  if (Number.isNaN(d.getTime())) return isoUtc;
-  return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).replace(/(\d{2})\/(\d{2})\/(\d{4}),?/, '$3-$2-$1');
+  if (Number.isNaN(d.getTime())) return { date: isoUtc, time: '' };
+  const date = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
+  const time = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false }); // HH:mm:ss
+  return { date, time };
 };
 
 export default function AdminAuditLog() {
@@ -57,14 +56,17 @@ export default function AdminAuditLog() {
         <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
           <table className="w-full text-sm" data-testid="audit-log-table">
             <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40 sticky top-0 z-10"><tr>
-              <th className="px-4 py-2.5">When</th><th>Admin</th><th>Action</th><th>Record</th><th>IP</th><th>Details</th>
+              <th className="px-4 py-2.5">Date</th><th>Time</th><th>Admin</th><th>Action</th><th>Record</th><th>IP</th><th>Details</th>
             </tr></thead>
             <tbody>
-              {loading ? Array.from({ length: 8 }).map((_, i) => <tr key={i} className="border-t border-border"><td colSpan={6} className="px-4 py-3"><Skeleton className="h-6 w-full" /></td></tr>) :
-                data.items.length === 0 ? <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">No audit entries</td></tr> :
-                data.items.map(a => (
+              {loading ? Array.from({ length: 8 }).map((_, i) => <tr key={i} className="border-t border-border"><td colSpan={7} className="px-4 py-3"><Skeleton className="h-6 w-full" /></td></tr>) :
+                data.items.length === 0 ? <tr><td colSpan={7} className="text-center py-8 text-muted-foreground text-sm">No audit entries</td></tr> :
+                data.items.map(a => {
+                  const { date, time } = istParts(a.timestamp);
+                  return (
                   <tr key={a.id} className="border-t border-border hover:bg-muted/30 align-top">
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{formatIST(a.timestamp)}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{date}</td>
+                    <td className="py-2.5 text-xs text-muted-foreground whitespace-nowrap">{time}</td>
                     <td className="py-2.5">{a.admin_email}</td>
                     <td className="py-2.5"><Badge variant="outline">{a.action?.replace(/_/g, ' ')}</Badge></td>
                     <td className="py-2.5 font-mono text-xs">{a.document_id}</td>
@@ -73,7 +75,8 @@ export default function AdminAuditLog() {
                       {a.details && Object.keys(a.details).length > 0 ? JSON.stringify(a.details) : '-'}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
             </tbody>
           </table>
         </div>
