@@ -68,9 +68,9 @@ export default function AdminUsers() {
       </div>
 
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40"><tr><th className="px-4 py-2.5">Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
+            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40 sticky top-0 z-10"><tr><th className="px-4 py-2.5">Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
             <tbody>
               {loading ? <tr><td colSpan={4} className="text-center py-8 text-muted-foreground text-sm">Loading...</td></tr> :
                 rows.map(u => (

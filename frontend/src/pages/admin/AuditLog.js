@@ -42,9 +42,9 @@ export default function AdminAuditLog() {
         </Select>
       </div>
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
           <table className="w-full text-sm" data-testid="audit-log-table">
-            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40"><tr>
+            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40 sticky top-0 z-10"><tr>
               <th className="px-4 py-2.5">When</th><th>Admin</th><th>Action</th><th>Record</th><th>IP</th><th>Details</th>
             </tr></thead>
             <tbody>
