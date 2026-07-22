@@ -112,9 +112,9 @@ export default function AdminOrders() {
         </div>
       )}
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
           <table className="w-full text-sm" data-testid="admin-orders-table">
-            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40"><tr>
+            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40 sticky top-0 z-10"><tr>
               <th className="px-4 py-2.5 w-8"><input type="checkbox" checked={data.items.length > 0 && selected.length === data.items.length} onChange={toggleSelectAll} data-testid="admin-orders-select-all" /></th>
               <th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Status</th><th>Date</th>
             </tr></thead>
