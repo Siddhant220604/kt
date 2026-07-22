@@ -921,7 +921,8 @@ async def list_categories():
     cached = cache_get('categories')
     if cached is not None:
         return cached
-    cats = await db.categories.find({}, {'_id': 0}).sort('order', 1).to_list(500)
+    cats = await db.categories.find({}, {'_id': 0}).to_list(500)
+    cats.sort(key=lambda c: c['name'].strip().lower())
     # add product counts
     for c in cats:
         c['product_count'] = await db.products.count_documents({'category_id': c['id'], 'active': True})
@@ -988,7 +989,7 @@ async def list_products(
     page: int = 1,
     limit: int = 24,
 ):
-    q: Dict = {'active': True}
+    q: Dict = {} if admin_payload else {'active': True}
     if category:
         q['category_id'] = category
     if featured is not None:

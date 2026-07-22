@@ -22,6 +22,7 @@ export default function AdminProducts() {
   const [cats, setCats] = useState([]);
   const [edit, setEdit] = useState(null);
   const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [saving, setSaving] = useState(false);
   const [sp, setSp] = useSearchParams();
   const [importing, setImporting] = useState(false);
@@ -37,6 +38,8 @@ export default function AdminProducts() {
     setLoading(false);
   }, [q]);
   useEffect(() => { load(); }, [load]);
+
+  const visibleItems = data.items.filter(p => statusFilter === 'all' ? true : statusFilter === 'active' ? p.active : !p.active);
 
   const openNew = () => setEdit({ ...empty, category_id: cats[0]?.id || '' });
   const openEdit = (p) => setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specsList: Object.entries(p.specs || {}).map(([key, value]) => ({ key, value })), tags: p.tags || [], price_tiers: p.price_tiers || [], sale_price: p.sale_price || '', sale_starts_at: p.sale_starts_at || '', sale_ends_at: p.sale_ends_at || '' });
@@ -148,6 +151,14 @@ export default function AdminProducts() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products" className="pl-9 w-60" />
           </form>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-36" data-testid="admin-product-status-filter"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Draft</SelectItem>
+            </SelectContent>
+          </Select>
           <Button variant="outline" onClick={downloadTemplate} className="gap-1" title="Download a blank CSV to fill in"><FileSpreadsheet className="h-4 w-4" />Template</Button>
           <Button variant="outline" onClick={exportCsv} className="gap-1" data-testid="admin-export-products"><Download className="h-4 w-4" />Export CSV</Button>
           <label className="cursor-pointer">
@@ -177,7 +188,7 @@ export default function AdminProducts() {
             <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40"><tr><th className="px-4 py-2.5">Product</th><th>Category</th><th>Price</th><th>Stock</th><th>MOQ</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {loading ? Array.from({ length: 5 }).map((_, i) => <tr key={i} className="border-t border-border"><td colSpan={7} className="px-4 py-3"><Skeleton className="h-6" /></td></tr>) :
-                data.items.map(p => (
+                visibleItems.map(p => (
                   <tr key={p.id} className="border-t border-border hover:bg-muted/30">
                     <td className="px-4 py-2.5"><div className="flex items-center gap-2"><img src={(p.images && p.images[0]) || 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=100&q=80'} alt="" className="h-10 w-10 rounded object-cover" /><div className="font-medium text-sm line-clamp-1">{p.name}</div></div></td>
                     <td className="py-2.5 text-xs">{cats.find(c => c.id === p.category_id)?.name || '-'}</td>
@@ -190,7 +201,7 @@ export default function AdminProducts() {
                 ))}
             </tbody>
           </table>
-          {!loading && data.items.length === 0 && <div className="text-center py-8 text-sm text-muted-foreground">No products</div>}
+          {!loading && visibleItems.length === 0 && <div className="text-center py-8 text-sm text-muted-foreground">No products</div>}
         </div>
       </div>
 
