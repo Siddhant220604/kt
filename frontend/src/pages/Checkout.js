@@ -35,6 +35,8 @@ export default function Checkout() {
   const [pincodeValid, setPincodeValid] = useState(null);
   const [pincodeReason, setPincodeReason] = useState(null);
   const freeShipAbove = settings.free_shipping_above || 2000;
+  const cityValid = form.city.trim().toLowerCase() === 'lucknow';
+  const stateValid = form.state.trim().toLowerCase() === 'uttar pradesh';
   const deliveryBlocked = !!(deliveryEstimate && deliveryEstimate.delivery_allowed === false);
   const shipping = deliveryEstimate && deliveryEstimate.delivery_allowed
     ? (subtotal >= freeShipAbove ? 0 : deliveryEstimate.shipping)
@@ -198,6 +200,8 @@ export default function Checkout() {
     if (!items.length) return toast.error('Cart is empty');
     if (!/^[6-9]\d{9}$/.test(form.mobile)) return toast.error('Enter a valid 10-digit mobile number');
     if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return toast.error('Enter a valid email address');
+    if (!cityValid) return toast.error('We only deliver within Lucknow. Please enter "Lucknow" as the city.');
+    if (!stateValid) return toast.error('We only deliver within Uttar Pradesh. Please enter "Uttar Pradesh" as the state.');
     if (!form.pincode || form.pincode.length !== 6) return toast.error('Enter a valid pincode');
     if (pincodeValid === false) return toast.error(pincodeReason === 'outside_lucknow' ? 'Sorry, we only deliver within Lucknow. Please enter a Lucknow pincode.' : 'Enter a valid pincode - this pincode does not exist');
     if (deliveryBlocked) return toast.error(deliveryEstimate.reason || 'Delivery is not available at this address');
@@ -340,8 +344,16 @@ export default function Checkout() {
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Email *</Label><Input required type="email" value={form.email} onChange={(e) => upd('email', e.target.value)} data-testid="checkout-email-input" /></div>
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 1 *</Label><Input required value={form.address_line1} onChange={(e) => upd('address_line1', e.target.value)} data-testid="checkout-address-line1-input" placeholder="House / Shop No., Street" /></div>
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 2</Label><Input value={form.address_line2} onChange={(e) => upd('address_line2', e.target.value)} placeholder="Area, Locality" /></div>
-                <div><Label className="text-xs text-muted-foreground">City *</Label><Input required value={form.city} onChange={(e) => upd('city', e.target.value)} /></div>
-                <div><Label className="text-xs text-muted-foreground">State *</Label><Input required value={form.state} onChange={(e) => upd('state', e.target.value)} /></div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">City *</Label>
+                  <Input required value={form.city} onChange={(e) => upd('city', e.target.value)} aria-invalid={!cityValid} data-testid="checkout-city-input" />
+                  {!cityValid && <div className="text-xs text-red-600 mt-1">We only deliver within Lucknow - please enter "Lucknow"</div>}
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">State *</Label>
+                  <Input required value={form.state} onChange={(e) => upd('state', e.target.value)} aria-invalid={!stateValid} data-testid="checkout-state-input" />
+                  {!stateValid && <div className="text-xs text-red-600 mt-1">We only deliver within Uttar Pradesh - please enter "Uttar Pradesh"</div>}
+                </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Pincode *</Label>
                   <Input required inputMode="numeric" maxLength={6} value={form.pincode} onChange={(e) => upd('pincode', e.target.value.replace(/[^0-9]/g, ''))} data-testid="checkout-pincode-input" aria-invalid={pincodeValid === false} />
@@ -459,7 +471,7 @@ export default function Checkout() {
               {deliveryBlocked && (
                 <div className="mt-3 text-xs text-red-600 text-center">{deliveryEstimate.reason}</div>
               )}
-              <Button type="submit" size="lg" className="w-full mt-4" disabled={placing || deliveryBlocked} data-testid="place-order-button">
+              <Button type="submit" size="lg" className="w-full mt-4" disabled={placing || deliveryBlocked || !cityValid || !stateValid} data-testid="place-order-button">
                 {placing ? (payment === 'online' ? 'Processing payment...' : 'Placing order...') : (payment === 'online' ? `Pay Now • ${formatINR(total)}` : `Place Order • ${formatINR(total)}`)}
               </Button>
               <div className="text-[10px] text-muted-foreground text-center mt-2">By placing the order, you agree to our terms.</div>

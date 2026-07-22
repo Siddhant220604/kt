@@ -24,6 +24,8 @@ import base64
 import time
 import qrcode
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import secrets
 from PIL import Image as PILImage
 
@@ -450,6 +452,20 @@ class AddressIn(BaseModel):
     @classmethod
     def validate_gst_number(cls, v: Optional[str]) -> Optional[str]:
         return _validate_optional_pattern(v, GST_NUMBER_REGEX, 'GST number')
+
+    @field_validator('city')
+    @classmethod
+    def validate_city(cls, v: str) -> str:
+        if v.strip().lower() != 'lucknow':
+            raise ValueError('We only deliver within Lucknow. Please enter "Lucknow" as the city.')
+        return v
+
+    @field_validator('state')
+    @classmethod
+    def validate_state(cls, v: str) -> str:
+        if v.strip().lower() != 'uttar pradesh':
+            raise ValueError('We only deliver within Uttar Pradesh. Please enter "Uttar Pradesh" as the state.')
+        return v
 
 class OrderIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -1658,6 +1674,33 @@ GOOGLE_MAPS_TIMEOUT = 5
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
 DELIVERY_UNAVAILABLE_MESSAGE = 'Sorry, we currently only deliver within Lucknow. Please enter a Lucknow address to continue.'
 
+# The exact set of Lucknow-district PIN codes we deliver to. Anything not in this set is
+# non-deliverable and blocks order placement.
+LUCKNOW_PINCODES = {
+    # Core city (226001-226031; 226030 is unassigned)
+    "226001", "226002", "226003", "226004", "226005", "226006", "226007",
+    "226008", "226009", "226010", "226011", "226012", "226013", "226014",
+    "226015", "226016", "226017", "226018", "226019", "226020", "226021",
+    "226022", "226023", "226024", "226025", "226026", "226027", "226028",
+    "226029", "226031",
+    # Peripheral / tehsil belts
+    "226101", "226102", "226103", "226104",
+    "226201", "226202", "226203",
+    "226301", "226302", "226303",
+    "226401", "226501",
+    # Southern rural block (Mohanlalganj / Nigohan)
+    "227305", "227309",
+}
+
+# api.postalpincode.in intermittently resets connections (RemoteDisconnected) when hit with the
+# default requests User-Agent / without retries - a small retrying session with a browser-like
+# UA fixes most of those transient failures.
+_pincode_session = requests.Session()
+_pincode_session.headers.update({'User-Agent': 'Mozilla/5.0 (compatible; KTStore/1.0)'})
+_pincode_session.mount('https://', HTTPAdapter(max_retries=Retry(
+    total=2, backoff_factor=0.5, status_forcelist=(500, 502, 503, 504), allowed_methods=('GET',),
+)))
+
 
 class DeliveryEstimateIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -1715,10 +1758,15 @@ async def _verify_indian_pincode(pincode: str) -> Optional[Dict[str, Any]]:
     """Look up a 6-digit Indian PIN code via the India Post public API to confirm it's a real,
     existing pincode (not just 6 digits). Returns {'found': True, 'city', 'state'} if it exists,
     {'found': False} if the API confirms it doesn't, or None if the lookup itself failed (so
-    callers can fail open rather than blocking on an unreachable third-party API)."""
+    callers can fail open rather than blocking on an unreachable third-party API).
+
+    Pincodes outside our deliverable Lucknow set are rejected locally without calling the
+    (occasionally flaky) external API at all, since we only ever deliver within that set."""
+    if pincode not in LUCKNOW_PINCODES:
+        return {'found': False}
     try:
         resp = await asyncio.to_thread(
-            requests.get,
+            _pincode_session.get,
             f'https://api.postalpincode.in/pincode/{pincode}',
             timeout=GOOGLE_MAPS_TIMEOUT,
         )
