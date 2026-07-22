@@ -183,9 +183,9 @@ export default function AdminProducts() {
         </div>
       )}
       <div className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40"><tr><th className="px-4 py-2.5">Product</th><th>Category</th><th>Price</th><th>Stock</th><th>MOQ</th><th>Status</th><th></th></tr></thead>
+            <thead className="text-left text-xs text-muted-foreground uppercase bg-muted/40 sticky top-0 z-10"><tr><th className="px-4 py-2.5">Product</th><th>Category</th><th>Price</th><th>Stock</th><th>MOQ</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {loading ? Array.from({ length: 5 }).map((_, i) => <tr key={i} className="border-t border-border"><td colSpan={7} className="px-4 py-3"><Skeleton className="h-6" /></td></tr>) :
                 visibleItems.map(p => (
