@@ -33,6 +33,7 @@ export default function Checkout() {
   const [deliveryEstimate, setDeliveryEstimate] = useState(null);
   const [checkingDelivery, setCheckingDelivery] = useState(false);
   const [pincodeValid, setPincodeValid] = useState(null);
+  const [pincodeReason, setPincodeReason] = useState(null);
   const freeShipAbove = settings.free_shipping_above || 2000;
   const deliveryBlocked = !!(deliveryEstimate && deliveryEstimate.delivery_allowed === false);
   const shipping = deliveryEstimate && deliveryEstimate.delivery_allowed
@@ -74,15 +75,16 @@ export default function Checkout() {
   useEffect(() => {
     if (form.pincode.length !== 6) {
       setPincodeValid(null);
+      setPincodeReason(null);
       return;
     }
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
         const { data } = await api.get(`/pincode/${form.pincode}/verify`);
-        if (!cancelled) setPincodeValid(data.valid);
+        if (!cancelled) { setPincodeValid(data.valid); setPincodeReason(data.reason || null); }
       } catch (err) {
-        if (!cancelled) setPincodeValid(true);
+        if (!cancelled) { setPincodeValid(true); setPincodeReason(null); }
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
@@ -197,7 +199,7 @@ export default function Checkout() {
     if (!/^[6-9]\d{9}$/.test(form.mobile)) return toast.error('Enter a valid 10-digit mobile number');
     if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return toast.error('Enter a valid email address');
     if (!form.pincode || form.pincode.length !== 6) return toast.error('Enter a valid pincode');
-    if (pincodeValid === false) return toast.error('Enter a valid pincode - this pincode does not exist');
+    if (pincodeValid === false) return toast.error(pincodeReason === 'outside_lucknow' ? 'Sorry, we only deliver within Lucknow. Please enter a Lucknow pincode.' : 'Enter a valid pincode - this pincode does not exist');
     if (deliveryBlocked) return toast.error(deliveryEstimate.reason || 'Delivery is not available at this address');
     setPlacing(true);
 
@@ -343,7 +345,7 @@ export default function Checkout() {
                 <div>
                   <Label className="text-xs text-muted-foreground">Pincode *</Label>
                   <Input required inputMode="numeric" maxLength={6} value={form.pincode} onChange={(e) => upd('pincode', e.target.value.replace(/[^0-9]/g, ''))} data-testid="checkout-pincode-input" aria-invalid={pincodeValid === false} />
-                  {pincodeValid === false && <div className="text-xs text-red-600 mt-1">This pincode does not exist</div>}
+                  {pincodeValid === false && <div className="text-xs text-red-600 mt-1">{pincodeReason === 'outside_lucknow' ? 'We only deliver within Lucknow - please enter a Lucknow pincode' : 'This pincode does not exist'}</div>}
                 </div>
                 <div><Label className="text-xs text-muted-foreground">Landmark</Label><Input value={form.landmark} onChange={(e) => upd('landmark', e.target.value)} /></div>
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">GST Number (optional)</Label><Input value={form.gst_number} onChange={(e) => upd('gst_number', e.target.value.toUpperCase())} placeholder="For GST invoice" /></div>

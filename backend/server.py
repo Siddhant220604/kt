@@ -1829,7 +1829,9 @@ async def verify_pincode(pincode: str, request: Request):
         # Lookup unavailable - fail open so a third-party API outage never blocks checkout.
         return {'valid': True, 'checked': False}
     if not info['found']:
-        return {'valid': False, 'checked': True}
+        return {'valid': False, 'checked': True, 'reason': 'not_found'}
+    if 'lucknow' not in (info.get('city') or '').strip().lower():
+        return {'valid': False, 'checked': True, 'reason': 'outside_lucknow', 'city': info.get('city', ''), 'state': info.get('state', '')}
     return {'valid': True, 'checked': True, 'city': info.get('city', ''), 'state': info.get('state', '')}
 
 
