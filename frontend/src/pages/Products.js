@@ -105,8 +105,8 @@ export default function Products() {
         </form>
         <div className="grid lg:grid-cols-[240px,1fr] gap-6">
           <aside className="hidden lg:block"><div className="sticky top-24"><Filters /></div></aside>
-          <div>
-            <div className="flex items-center gap-3 justify-between mb-4">
+          <div className="h-full flex flex-col">
+            <div className="flex items-center gap-3 justify-between mb-4 shrink-0">
               <Sheet>
                 <SheetTrigger asChild>
                   <Button variant="outline" className="lg:hidden gap-2" data-testid="open-filters-button"><SlidersHorizontal className="h-4 w-4" /> Filters</Button>
@@ -126,7 +126,7 @@ export default function Products() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="max-h-[70vh] overflow-y-auto pr-1">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
               {loading ? (
                 <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
                   {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-72 rounded-2xl" />)}
