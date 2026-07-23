@@ -133,9 +133,9 @@ export default function Home() {
       <Section>
         <Container>
           <SectionTitle eyebrow="Shop by Category" title="What are you looking for?" subtitle="Complete range of disposables, packaging, and wholesale essentials."
-            action={<Link to="/products"><Button variant="ghost" className="gap-1">View all <ArrowRight className="h-4 w-4" /></Button></Link>} />
+            action={<Link to="/categories"><Button variant="ghost" className="gap-1">View all <ArrowRight className="h-4 w-4" /></Button></Link>} />
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {loading ? Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-40 rounded-2xl" />) : cats.map((c) => (
+            {loading ? Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-40 rounded-2xl" />) : cats.slice(0, 8).map((c) => (
               <Link key={c.id} to={`/products?category=${c.id}`} data-testid={`category-card-${c.slug}`}
                 className="group relative aspect-[4/3] rounded-2xl overflow-hidden border border-border bg-card hover:shadow-lg transition-shadow">
                 <img src={categoryImages[c.name] || 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=600&q=80'} alt={c.name} className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
