@@ -24,6 +24,8 @@ export default function Products() {
   const page = Number(sp.get('page') || 1);
 
   const [q, setQ] = useState(search);
+  const [minInput, setMinInput] = useState(minPrice);
+  const [maxInput, setMaxInput] = useState(maxPrice);
   const [cats, setCats] = useState([]);
   const [data, setData] = useState({ items: [], total: 0, pages: 1 });
   const [loading, setLoading] = useState(true);
@@ -31,6 +33,8 @@ export default function Products() {
 
   useEffect(() => { api.get('/categories').then(r => setCats(r.data)); }, []);
   useEffect(() => { setQ(search); }, [search]);
+  useEffect(() => { setMinInput(minPrice); }, [minPrice]);
+  useEffect(() => { setMaxInput(maxPrice); }, [maxPrice]);
 
   useEffect(() => {
     setLoading(true);
@@ -48,6 +52,14 @@ export default function Products() {
     const next = new URLSearchParams(sp);
     if (v === '' || v == null || v === false) next.delete(k); else next.set(k, v === true ? '1' : String(v));
     if (k !== 'page') next.delete('page');
+    setSp(next);
+  };
+
+  const applyPriceFilter = () => {
+    const next = new URLSearchParams(sp);
+    if (minInput) next.set('min_price', minInput); else next.delete('min_price');
+    if (maxInput) next.set('max_price', maxInput); else next.delete('max_price');
+    next.delete('page');
     setSp(next);
   };
 
@@ -71,9 +83,10 @@ export default function Products() {
       <div>
         <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">Price Range</div>
         <div className="flex gap-2">
-          <Input placeholder="Min" type="number" value={minPrice} onChange={(e) => updateParam('min_price', e.target.value)} data-testid="filter-min-price" />
-          <Input placeholder="Max" type="number" value={maxPrice} onChange={(e) => updateParam('max_price', e.target.value)} data-testid="filter-max-price" />
+          <Input placeholder="Min" type="number" value={minInput} onChange={(e) => setMinInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') applyPriceFilter(); }} data-testid="filter-min-price" />
+          <Input placeholder="Max" type="number" value={maxInput} onChange={(e) => setMaxInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') applyPriceFilter(); }} data-testid="filter-max-price" />
         </div>
+        <Button variant="outline" size="sm" className="w-full mt-2" onClick={applyPriceFilter} data-testid="apply-price-filter">Apply Filter</Button>
       </div>
       <div>
         <label className="flex items-center gap-2 cursor-pointer">
