@@ -57,7 +57,7 @@ export default function Products() {
     <div className="space-y-6 p-1">
       <div>
         <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">Categories</div>
-        <div className="space-y-1">
+        <div className="space-y-1 max-h-[70vh] overflow-y-auto pr-1">
           <button onClick={() => { updateParam('category', ''); onClose && onClose(); }} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${!category ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>All Products</button>
           {cats.map(c => (
             <button key={c.id} onClick={() => { updateParam('category', c.id); onClose && onClose(); }} data-testid={`filter-cat-${c.slug}`}
@@ -126,35 +126,37 @@ export default function Products() {
                 </SelectContent>
               </Select>
             </div>
-            {loading ? (
-              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
-                {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-72 rounded-2xl" />)}
-              </div>
-            ) : data.items.length === 0 ? (
-              <div className="text-center py-16 bg-card border border-border rounded-2xl">
-                <div className="font-display font-semibold text-lg">No products found</div>
-                <p className="text-sm text-muted-foreground mt-1">Try removing filters, or WhatsApp us your requirement.</p>
-                <div className="mt-4 flex gap-3 justify-center">
-                  <Button onClick={() => setSp(new URLSearchParams())}>Clear filters</Button>
-                  <a href={`https://wa.me/${settings.whatsapp || '919876543210'}`} target="_blank" rel="noreferrer">
-                    <Button variant="outline" className="gap-2"><MessageCircle className="h-4 w-4" />WhatsApp Inquiry</Button>
-                  </a>
-                </div>
-              </div>
-            ) : (
-              <>
+            <div className="max-h-[70vh] overflow-y-auto pr-1">
+              {loading ? (
                 <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
-                  {data.items.map(p => <ProductCard key={p.id} product={p} />)}
+                  {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-72 rounded-2xl" />)}
                 </div>
-                {data.pages > 1 && (
-                  <div className="flex justify-center items-center gap-2 mt-8">
-                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => updateParam('page', page - 1)}><ArrowLeft className="h-4 w-4" /></Button>
-                    <div className="text-sm px-3">Page {page} of {data.pages}</div>
-                    <Button variant="outline" size="sm" disabled={page >= data.pages} onClick={() => updateParam('page', page + 1)}><ArrowRight className="h-4 w-4" /></Button>
+              ) : data.items.length === 0 ? (
+                <div className="text-center py-16 bg-card border border-border rounded-2xl">
+                  <div className="font-display font-semibold text-lg">No products found</div>
+                  <p className="text-sm text-muted-foreground mt-1">Try removing filters, or WhatsApp us your requirement.</p>
+                  <div className="mt-4 flex gap-3 justify-center">
+                    <Button onClick={() => setSp(new URLSearchParams())}>Clear filters</Button>
+                    <a href={`https://wa.me/${settings.whatsapp || '919876543210'}`} target="_blank" rel="noreferrer">
+                      <Button variant="outline" className="gap-2"><MessageCircle className="h-4 w-4" />WhatsApp Inquiry</Button>
+                    </a>
                   </div>
-                )}
-              </>
-            )}
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+                    {data.items.map(p => <ProductCard key={p.id} product={p} />)}
+                  </div>
+                  {data.pages > 1 && (
+                    <div className="flex justify-center items-center gap-2 mt-8">
+                      <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => updateParam('page', page - 1)}><ArrowLeft className="h-4 w-4" /></Button>
+                      <div className="text-sm px-3">Page {page} of {data.pages}</div>
+                      <Button variant="outline" size="sm" disabled={page >= data.pages} onClick={() => updateParam('page', page + 1)}><ArrowRight className="h-4 w-4" /></Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </Container>
