@@ -24,7 +24,8 @@ const ProductCard = ({ product }) => {
       data-testid="product-card">
       <div className="relative aspect-square bg-muted/40 overflow-hidden">
         <Link to={`/products/${product.slug || product.id}`}>
-          <img src={img} alt={product.name} loading="lazy" className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" onError={(e) => { e.target.src = FALLBACK; }} />
+          <img src={img} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover scale-110 blur-2xl opacity-60" onError={(e) => { e.target.src = FALLBACK; }} />
+          <img src={img} alt={product.name} loading="lazy" className="relative w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" onError={(e) => { e.target.src = FALLBACK; }} />
         </Link>
         <button onClick={() => { toggle(product.id); toast.success(has(product.id) ? 'Removed from wishlist' : 'Added to wishlist'); }}
           data-testid="product-card-wishlist-toggle"

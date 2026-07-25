@@ -148,8 +148,9 @@ export default function ProductDetail() {
           <div className="grid md:grid-cols-2 gap-8 lg:gap-12">
             {/* Gallery */}
             <div>
-              <div className="aspect-square rounded-2xl overflow-hidden border border-border bg-card">
-                <img src={images[activeImg] || FALLBACK} alt={product.name} className="w-full h-full object-contain" onError={(e) => { e.target.src = FALLBACK; }} data-testid="product-main-image" />
+              <div className="relative aspect-square rounded-2xl overflow-hidden border border-border bg-card">
+                <img src={images[activeImg] || FALLBACK} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover scale-110 blur-2xl opacity-60" onError={(e) => { e.target.src = FALLBACK; }} />
+                <img src={images[activeImg] || FALLBACK} alt={product.name} className="relative w-full h-full object-contain" onError={(e) => { e.target.src = FALLBACK; }} data-testid="product-main-image" />
               </div>
               {images.length > 1 && (
                 <div className="mt-3 flex gap-2 overflow-x-auto no-scrollbar">
