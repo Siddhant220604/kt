@@ -149,13 +149,13 @@ export default function ProductDetail() {
             {/* Gallery */}
             <div>
               <div className="aspect-square rounded-2xl overflow-hidden border border-border bg-card">
-                <img src={images[activeImg] || FALLBACK} alt={product.name} className="w-full h-full object-cover" onError={(e) => { e.target.src = FALLBACK; }} data-testid="product-main-image" />
+                <img src={images[activeImg] || FALLBACK} alt={product.name} className="w-full h-full object-contain" onError={(e) => { e.target.src = FALLBACK; }} data-testid="product-main-image" />
               </div>
               {images.length > 1 && (
                 <div className="mt-3 flex gap-2 overflow-x-auto no-scrollbar">
                   {images.map((im, i) => (
                     <button key={i} onClick={() => setActiveImg(i)} className={`h-16 w-16 shrink-0 rounded-xl overflow-hidden border ${i === activeImg ? 'border-primary ring-2 ring-primary' : 'border-border'}`}>
-                      <img src={im} className="w-full h-full object-cover" alt="" />
+                      <img src={im} className="w-full h-full object-contain" alt="" />
                     </button>
                   ))}
                 </div>
