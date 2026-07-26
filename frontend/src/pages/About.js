@@ -32,7 +32,7 @@ export default function About() {
             </div>
             <div>
               <div className="aspect-video rounded-2xl overflow-hidden border border-border">
-                <img src="https://images.unsplash.com/photo-1705846973668-0e9ed382ea8f?w=1200&q=80" alt="About" className="w-full h-full object-cover" />
+                <img src={settings.about_image || 'https://images.unsplash.com/photo-1705846973668-0e9ed382ea8f?w=1200&q=80'} alt="About" className="w-full h-full object-cover" />
               </div>
             </div>
           </div>

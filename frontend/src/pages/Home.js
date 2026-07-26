@@ -87,18 +87,18 @@ export default function Home() {
             className="relative grid grid-cols-2 gap-3">
             <div className="space-y-3">
               <div className="aspect-square rounded-2xl overflow-hidden border border-border bg-card shadow-lg">
-                <img src="https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=800&q=80" alt="Thermocol" className="w-full h-full object-cover" />
+                <img src={settings.hero_image_1 || 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=800&q=80'} alt="Thermocol" className="w-full h-full object-cover" />
               </div>
               <div className="aspect-video rounded-2xl overflow-hidden border border-border bg-card shadow-lg">
-                <img src="https://images.unsplash.com/photo-1573106456020-5ce9db6d3679?w=800&q=80" alt="Bags" className="w-full h-full object-cover" />
+                <img src={settings.hero_image_2 || 'https://images.unsplash.com/photo-1573106456020-5ce9db6d3679?w=800&q=80'} alt="Bags" className="w-full h-full object-cover" />
               </div>
             </div>
             <div className="space-y-3 pt-8">
               <div className="aspect-video rounded-2xl overflow-hidden border border-border bg-card shadow-lg">
-                <img src="https://images.unsplash.com/photo-1600271886742-f049cd451bba?w=800&q=80" alt="Cups" className="w-full h-full object-cover" />
+                <img src={settings.hero_image_3 || 'https://images.unsplash.com/photo-1600271886742-f049cd451bba?w=800&q=80'} alt="Cups" className="w-full h-full object-cover" />
               </div>
               <div className="aspect-square rounded-2xl overflow-hidden border border-border bg-card shadow-lg">
-                <img src="https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800&q=80" alt="Luggage" className="w-full h-full object-cover" />
+                <img src={settings.hero_image_4 || 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800&q=80'} alt="Luggage" className="w-full h-full object-cover" />
               </div>
             </div>
           </motion.div>

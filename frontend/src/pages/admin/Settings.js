@@ -35,6 +35,11 @@ export default function AdminSettings() {
         free_shipping_above: Number(form.free_shipping_above || 0),
         shop_lat: Number(form.shop_lat || 0),
         shop_lng: Number(form.shop_lng || 0),
+        hero_image_1: form.hero_image_1,
+        hero_image_2: form.hero_image_2,
+        hero_image_3: form.hero_image_3,
+        hero_image_4: form.hero_image_4,
+        about_image: form.about_image,
       });
       toast.success('Settings saved'); reload();
     } catch (e) { toast.error('Save failed'); }
@@ -46,6 +51,13 @@ export default function AdminSettings() {
     if (file.size > 512 * 1024) return toast.error('QR too large. Please use <512KB.');
     const b64 = await readFileAsDataURL(file);
     upd('upi_qr', b64);
+  };
+
+  const uploadImage = async (key, file) => {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return toast.error('Image too large. Please use under 2MB.');
+    const b64 = await readFileAsDataURL(file);
+    upd(key, b64);
   };
 
   return (
@@ -79,6 +91,39 @@ export default function AdminSettings() {
         <div className="grid sm:grid-cols-2 gap-3">
           <div><Label>Shop Latitude</Label><Input type="number" step="any" value={form.shop_lat ?? ''} onChange={(e) => upd('shop_lat', e.target.value)} /></div>
           <div><Label>Shop Longitude</Label><Input type="number" step="any" value={form.shop_lng ?? ''} onChange={(e) => upd('shop_lng', e.target.value)} /></div>
+        </div>
+      </div>
+      <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
+        <div className="font-display font-semibold">Homepage Images</div>
+        <p className="text-xs text-muted-foreground">Shown in the hero image collage on the homepage. PNG/JPEG/WEBP, under 2MB each.</p>
+        <div className="grid sm:grid-cols-4 gap-3">
+          {[1, 2, 3, 4].map((n) => (
+            <div key={n} className="space-y-2">
+              <Label>Hero Image {n}</Label>
+              <div className="aspect-square rounded-xl overflow-hidden border border-border bg-muted">
+                {form[`hero_image_${n}`] ? (
+                  <img src={form[`hero_image_${n}`]} alt={`Hero ${n}`} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
+                )}
+              </div>
+              <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage(`hero_image_${n}`, e.target.files[0])} />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
+        <div className="font-display font-semibold">About Page Image</div>
+        <p className="text-xs text-muted-foreground">Shown next to "Our Story" on the About page. PNG/JPEG/WEBP, under 2MB.</p>
+        <div className="max-w-xs space-y-2">
+          <div className="aspect-video rounded-xl overflow-hidden border border-border bg-muted">
+            {form.about_image ? (
+              <img src={form.about_image} alt="About" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
+            )}
+          </div>
+          <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage('about_image', e.target.files[0])} />
         </div>
       </div>
       <div><Button onClick={save} disabled={saving} data-testid="admin-settings-save">{saving ? 'Saving...' : 'Save Settings'}</Button></div>
