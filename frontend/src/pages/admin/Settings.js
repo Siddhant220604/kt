@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { api, errorMessage } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
@@ -42,7 +42,7 @@ export default function AdminSettings() {
         about_image: form.about_image,
       });
       toast.success('Settings saved'); reload();
-    } catch (e) { toast.error('Save failed'); }
+    } catch (e) { toast.error(errorMessage(e, 'Save failed')); }
     finally { setSaving(false); }
   };
 
