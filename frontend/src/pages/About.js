@@ -31,8 +31,13 @@ export default function About() {
               </div>
             </div>
             <div>
-              <div className="aspect-video rounded-2xl overflow-hidden border border-border">
-                <img src={settings.about_image || 'https://images.unsplash.com/photo-1705846973668-0e9ed382ea8f?w=1200&q=80'} alt="About" className="w-full h-full object-cover" />
+              <div className="relative aspect-[3/4] max-w-md mx-auto rounded-2xl overflow-hidden border border-border bg-muted/40">
+                {(() => { const img = settings.about_image || 'https://images.unsplash.com/photo-1705846973668-0e9ed382ea8f?w=1200&q=80'; return (
+                  <>
+                    <img src={img} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover scale-110 blur-2xl opacity-60" />
+                    <img src={img} alt="About" className="relative w-full h-full object-contain" />
+                  </>
+                ); })()}
               </div>
             </div>
           </div>
