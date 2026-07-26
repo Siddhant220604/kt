@@ -21,24 +21,21 @@ export default function About() {
       </div>
       <Section>
         <Container>
-          <div className="grid md:grid-cols-2 gap-10 items-start">
-            <div>
-              <h2 className="text-2xl font-display font-bold">Our Story</h2>
-              <p className="mt-4 text-muted-foreground">Founded in 1996, Kiran Traders started with a simple promise: supply quality disposable and packaging products at wholesale prices, on time, every time. Nearly three decades later, that promise still guides everything we do.</p>
-              <p className="mt-3 text-muted-foreground">Today we serve caterers, halwais, retail shopkeepers, event managers, corporate offices, and small businesses across Lucknow. Delivery available within Lucknow only.</p>
-              <div className="mt-6 grid grid-cols-1 gap-4">
-                <div className="bg-card border border-border rounded-xl p-4 text-center"><div className="text-3xl font-display font-bold text-[hsl(var(--brand-terracotta))]">25+</div><div className="text-xs text-muted-foreground">Years in Business</div></div>
+          <div className="grid md:grid-cols-2 gap-10 items-center">
+            <div className="flex flex-col justify-center">
+              <h2 className="text-3xl font-display font-bold">Our Story</h2>
+              <p className="mt-5 text-lg text-muted-foreground leading-relaxed">Founded in 1996, Kiran Traders started with a simple promise: supply quality disposable and packaging products at wholesale prices, on time, every time. Nearly three decades later, that promise still guides everything we do.</p>
+              <p className="mt-4 text-lg text-muted-foreground leading-relaxed">Today we serve caterers, halwais, retail shopkeepers, event managers, corporate offices, and small businesses across Lucknow. Delivery available within Lucknow only.</p>
+              <div className="mt-8 grid grid-cols-1 gap-4">
+                <div className="bg-card border border-border rounded-xl p-6 text-center"><div className="text-4xl font-display font-bold text-[hsl(var(--brand-terracotta))]">25+</div><div className="text-sm text-muted-foreground mt-1">Years in Business</div></div>
               </div>
             </div>
             <div>
-              <div className="relative aspect-[3/4] max-w-md mx-auto rounded-2xl overflow-hidden border border-border bg-muted/40">
-                {(() => { const img = settings.about_image || 'https://images.unsplash.com/photo-1705846973668-0e9ed382ea8f?w=1200&q=80'; return (
-                  <>
-                    <img src={img} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover scale-110 blur-2xl opacity-60" />
-                    <img src={img} alt="About" className="relative w-full h-full object-contain" />
-                  </>
-                ); })()}
-              </div>
+              <img
+                src={settings.about_image || 'https://images.unsplash.com/photo-1705846973668-0e9ed382ea8f?w=1200&q=80'}
+                alt="About"
+                className="w-full h-auto max-w-md mx-auto rounded-2xl border border-border shadow-lg"
+              />
             </div>
           </div>
         </Container>
