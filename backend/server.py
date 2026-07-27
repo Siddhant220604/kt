@@ -4186,7 +4186,7 @@ async def seed_db():
     # banners
     if await db.banners.count_documents({}) == 0:
         banners = [
-            {'title': 'Wholesale Prices, Retail Convenience', 'subtitle': 'Thermocol plates, carry bags, packaging materials & more - delivered across Lucknow & UP.', 'cta_text': 'Shop Now', 'link': '/products', 'active': True, 'order': 1, 'image': 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=1400&q=80'},
+            {'title': 'Wholesale Prices, Retail Convenience', 'subtitle': 'Bagasse & mica plates, paper glasses, foil containers, food boxes and packing supplies - at wholesale rates, delivered across Lucknow.', 'cta_text': 'Shop Now', 'link': '/products', 'active': True, 'order': 1, 'image': 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=1400&q=80'},
             {'title': 'Since 1996 - Nearly 3 Decades of Trust', 'subtitle': 'Serving caterers, retailers, and event organizers with quality disposables.', 'cta_text': 'Explore Categories', 'link': '/products', 'active': True, 'order': 2, 'image': 'https://images.unsplash.com/photo-1584743579083-b331c4adbb15?w=1400&q=80'},
         ]
         for b in banners:

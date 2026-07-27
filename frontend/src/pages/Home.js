@@ -66,7 +66,7 @@ export default function Home() {
               <span className="text-[hsl(var(--brand-terracotta))]">Retail Convenience.</span>
             </h1>
             <p className="mt-4 text-base sm:text-lg text-muted-foreground max-w-xl">
-              {hero?.subtitle || 'Thermocol plates, carry bags, disposable glasses, packaging materials and more — delivered across Lucknow.'}
+              {hero?.subtitle || 'Bagasse & mica plates, paper glasses, foil containers, food boxes and packing supplies — at wholesale rates, delivered across Lucknow.'}
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Link to="/products"><Button size="lg" className="gap-2" data-testid="hero-browse-products">Browse Products <ArrowRight className="h-4 w-4" /></Button></Link>
