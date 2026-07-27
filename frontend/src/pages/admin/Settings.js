@@ -40,6 +40,7 @@ export default function AdminSettings() {
         hero_image_3: form.hero_image_3,
         hero_image_4: form.hero_image_4,
         about_image: form.about_image,
+        about_hero_image: form.about_hero_image,
       });
       toast.success('Settings saved'); reload();
     } catch (e) { toast.error(errorMessage(e, 'Save failed')); }
@@ -113,17 +114,32 @@ export default function AdminSettings() {
         </div>
       </div>
       <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
-        <div className="font-display font-semibold">About Page Image</div>
-        <p className="text-xs text-muted-foreground">Shown next to "Our Story" on the About page. PNG/JPEG/WEBP, under 2MB.</p>
-        <div className="max-w-xs space-y-2">
-          <div className="aspect-video rounded-xl overflow-hidden border border-border bg-muted">
-            {form.about_image ? (
-              <img src={form.about_image} alt="About" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
-            )}
+        <div className="font-display font-semibold">About Page Images</div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Banner Background</Label>
+            <p className="text-xs text-muted-foreground">Sits behind the heading at the top of the About page. A wide shot works best. PNG/JPEG/WEBP, under 2MB.</p>
+            <div className="aspect-video rounded-xl overflow-hidden border border-border bg-muted">
+              {form.about_hero_image ? (
+                <img src={form.about_hero_image} alt="About banner" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
+              )}
+            </div>
+            <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage('about_hero_image', e.target.files[0])} />
           </div>
-          <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage('about_image', e.target.files[0])} />
+          <div className="space-y-2">
+            <Label>Our Story Photo</Label>
+            <p className="text-xs text-muted-foreground">Shown next to "Our Story" further down the page. PNG/JPEG/WEBP, under 2MB.</p>
+            <div className="aspect-video rounded-xl overflow-hidden border border-border bg-muted">
+              {form.about_image ? (
+                <img src={form.about_image} alt="About" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
+              )}
+            </div>
+            <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage('about_image', e.target.files[0])} />
+          </div>
         </div>
       </div>
       <div><Button onClick={save} disabled={saving} data-testid="admin-settings-save">{saving ? 'Saving...' : 'Save Settings'}</Button></div>

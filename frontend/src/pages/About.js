@@ -15,14 +15,22 @@ const HIGHLIGHTS = [
 
 export default function About() {
   const { settings } = useSettings();
+  const bannerImg = settings.about_hero_image;
   return (
     <div>
       <Seo title="About Us" description="Kiran Traders - Lucknow's trusted wholesale packaging partner since 1996. Thermocol plates, carry bags, disposables & more." />
-      <div className="hero-radial noise-overlay border-b border-border">
+      <div className={`relative overflow-hidden noise-overlay border-b border-border ${bannerImg ? '' : 'hero-radial'}`}>
+        {bannerImg && (
+          <>
+            <img src={bannerImg} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover" />
+            {/* The shopfront photo is busy and light, so the copy needs its own scrim to stay legible. */}
+            <div className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/70 to-black/45" />
+          </>
+        )}
         <Container className="relative z-10 py-14 md:py-20">
           <Badge className="bg-[hsl(var(--brand-marigold))] text-black mb-4">Since 1996</Badge>
-          <h1 className="text-4xl md:text-5xl font-display font-bold">Kiran Traders — Lucknow's Trusted Wholesale Partner</h1>
-          <p className="text-lg text-muted-foreground mt-4 max-w-3xl">
+          <h1 className={`text-4xl md:text-5xl font-display font-bold ${bannerImg ? 'text-white' : ''}`}>Kiran Traders — Lucknow's Trusted Wholesale Partner</h1>
+          <p className={`text-lg mt-4 max-w-3xl ${bannerImg ? 'text-white/85' : 'text-muted-foreground'}`}>
             From a small wholesale shop on Nadan Mahal Road, we've grown by providing quality products, dependable service, and honest pricing to businesses across Uttar Pradesh.
           </p>
         </Container>

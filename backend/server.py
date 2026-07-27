@@ -714,6 +714,7 @@ class SettingsIn(BaseModel):
     hero_image_3: Optional[str] = Field(None, max_length=2_800_000)
     hero_image_4: Optional[str] = Field(None, max_length=2_800_000)
     about_image: Optional[str] = Field(None, max_length=2_800_000)
+    about_hero_image: Optional[str] = Field(None, max_length=2_800_000)
     bank_details: Optional[str] = Field(None, max_length=1000)
     hours: Optional[str] = Field(None, max_length=200)
     gstin: Optional[str] = Field(None, max_length=20)
@@ -768,6 +769,11 @@ class SettingsIn(BaseModel):
     @classmethod
     def validate_about_image(cls, v: Optional[str]) -> Optional[str]:
         return validate_image_field(v, 'About image')
+
+    @field_validator('about_hero_image')
+    @classmethod
+    def validate_about_hero_image(cls, v: Optional[str]) -> Optional[str]:
+        return validate_image_field(v, 'About banner image')
 
 # ------------------ AUTH ROUTES ------------------
 
