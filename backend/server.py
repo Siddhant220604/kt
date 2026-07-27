@@ -662,7 +662,9 @@ class BannerIn(BaseModel):
     @field_validator('image')
     @classmethod
     def validate_image(cls, v: str) -> str:
-        return validate_image_field(v, 'Banner image')
+        # validate_image_field passes '' straight through, so the `or ''` only ever restates
+        # that - it's here to keep the return type str for this non-optional field.
+        return validate_image_field(v, 'Banner image') or ''
 
 class ReviewIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -1236,7 +1238,9 @@ async def import_products(request: Request, payload: Dict = Depends(require_admi
             category_id = cat_by_name.get(category_name.lower())
             if not category_id:
                 raise ValueError(f'Unknown category "{category_name}"')
-            pr = ProductIn(
+            # pyright reads `Field(None, ...)` as no-default and reports slug/sale_* as missing
+            # arguments; pydantic treats them as optional, as the neighbouring Field('') ones show.
+            pr = ProductIn(  # pyright: ignore[reportCallIssue]
                 name=(row.get('name') or '').strip(),
                 category_id=category_id,
                 description=row.get('description') or '',
@@ -1486,7 +1490,8 @@ async def verify_razorpay_payment(req: PaymentVerifyRequest, request: Request, b
     # notification already went out at order creation) - send order_confirmation, the same
     # template/params an admin's manual "Confirmed" status change sends via
     # send_order_status_update_whatsapp(). invoice_ready is sent later, on delivery, not here.
-    background_tasks.add_task(send_order_status_update_whatsapp, updated, 'confirmed', settings)
+    if updated:
+        background_tasks.add_task(send_order_status_update_whatsapp, updated, 'confirmed', settings)
     return {'ok': True, 'order': updated}
 
 
@@ -2221,7 +2226,9 @@ async def reset_customer_password(req: CustomerResetPasswordIn, request: Request
         and datetime.fromisoformat(expires_at) > datetime.now(timezone.utc)
         and auth.verify_password(req.otp, otp_hash)
     )
-    if not valid:
+    # `or not c` is implied by `valid` already (it starts with `c and ...`) - stated again so the
+    # non-None customer is provable to a type checker for the rest of the function.
+    if not valid or not c:
         if c:
             await db.customers.update_one({'id': c['id']}, {'$inc': {'reset_otp_attempts': 1}})
         dependencies.record_auth_failure(request, 'reset_password', email)
@@ -2528,10 +2535,10 @@ async def get_order(oid: str, _: Dict = Depends(require_staff)):
 ORDER_STATUSES = ['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
 
 
-async def _apply_order_status(oid: str, status: str, tracking_note: str, request: Request, background_tasks: BackgroundTasks, admin_email: str) -> Dict:
+async def _apply_order_status(oid: str, status: str, tracking_note: Optional[str], request: Request, background_tasks: BackgroundTasks, admin_email: str) -> Dict[str, Any]:
     if status not in ORDER_STATUSES:
         raise HTTPException(status_code=400, detail='Invalid status')
-    o = await db.orders.find_one({'id': oid}, {'_id': 0})
+    o: Optional[Dict[str, Any]] = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
         raise HTTPException(status_code=404, detail='Order not found')
     old_status = o.get('status')
@@ -2567,7 +2574,9 @@ async def _apply_order_status(oid: str, status: str, tracking_note: str, request
     if status == 'cancelled' and old_status != 'cancelled' and o.get('payment_status') == 'paid':
         update_fields['refund_status'] = 'pending'
     await db.orders.update_one({'id': oid}, {'$set': update_fields})
-    updated = await db.orders.find_one({'id': oid}, {'_id': 0})
+    # Falls back to the state we just wrote if the order is deleted between the update and this
+    # re-read, so the caller always gets an order back rather than a null body.
+    updated: Dict[str, Any] = await db.orders.find_one({'id': oid}, {'_id': 0}) or {**o, **update_fields}
     await audit.record_audit(db, admin_email, security.get_client_ip(request), 'update_order_status', oid, {'status': status})
     settings = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
     # Only notify on an actual status transition, so re-submitting the same status (e.g. a
@@ -2609,7 +2618,7 @@ RETURN_WINDOW_DAYS = 7
 @api_router.post('/customer/orders/{oid}/return')
 async def request_return(oid: str, req: ReturnRequestIn, request: Request, payload: Dict = Depends(dependencies.require_customer)):
     dependencies.check_authenticated_rate_limit(request, 'return_request', payload['sub'])
-    o = await db.orders.find_one({'id': oid}, {'_id': 0})
+    o: Optional[Dict[str, Any]] = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o or o.get('customer_id') != payload['sub']:
         raise HTTPException(status_code=404, detail='Order not found')
     if o.get('status') != 'delivered':
@@ -4086,7 +4095,8 @@ async def seed_db():
         # generate UPI QR image
         qr_data = f'upi://pay?pa={upi_id}&pn=Kiran%20Traders&cu=INR'
         img = qrcode.make(qr_data)
-        buf = io.BytesIO(); img.save(buf, format='PNG')
+        # qrcode's PilImage.save does accept format=; pyright resolves the narrower BaseImage.save.
+        buf = io.BytesIO(); img.save(buf, format='PNG')  # pyright: ignore[reportCallIssue]
         qr_b64 = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
         await db.settings.insert_one({
             'id': 'main',
