@@ -5,6 +5,14 @@ import Seo from '../components/site/Seo';
 import { Badge } from '../components/ui/badge';
 import { useSettings } from '../lib/settings';
 
+// Qualitative points only — the copy elsewhere on this page already backs each one.
+const HIGHLIGHTS = [
+  { icon: Award, title: 'Honest Wholesale Pricing', note: 'Straight rates, no hidden markups.' },
+  { icon: ShieldCheck, title: 'Quality You Can Trust', note: 'Stock we would use ourselves.' },
+  { icon: Users, title: 'Built for Businesses', note: 'Caterers, halwais, shops and offices.' },
+  { icon: Truck, title: 'Lucknow Delivery', note: 'Dependable dispatch across the city.' },
+];
+
 export default function About() {
   const { settings } = useSettings();
   return (
@@ -26,8 +34,15 @@ export default function About() {
               <h2 className="text-3xl font-display font-bold">Our Story</h2>
               <p className="mt-5 text-lg text-muted-foreground leading-relaxed">Founded in 1996, Kiran Traders started with a simple promise: supply quality disposable and packaging products at wholesale prices, on time, every time. Nearly three decades later, that promise still guides everything we do.</p>
               <p className="mt-4 text-lg text-muted-foreground leading-relaxed">Today we serve caterers, halwais, retail shopkeepers, event managers, corporate offices, and small businesses across Lucknow. Delivery available within Lucknow only.</p>
-              <div className="mt-8 grid grid-cols-1 gap-4">
-                <div className="bg-card border border-border rounded-xl p-6 text-center"><div className="text-4xl font-display font-bold text-[hsl(var(--brand-terracotta))]">25+</div><div className="text-sm text-muted-foreground mt-1">Years in Business</div></div>
+              <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2 bg-card border border-border rounded-xl p-6 text-center"><div className="text-4xl font-display font-bold text-[hsl(var(--brand-terracotta))]">25+</div><div className="text-sm text-muted-foreground mt-1">Years in Business</div></div>
+                {HIGHLIGHTS.map(({ icon: Icon, title, note }) => (
+                  <div key={title} className="bg-card border border-border rounded-xl p-5">
+                    <Icon className="h-6 w-6 text-[hsl(var(--brand-terracotta))] mb-2.5" />
+                    <div className="font-semibold leading-snug">{title}</div>
+                    <div className="text-sm text-muted-foreground mt-1 leading-snug">{note}</div>
+                  </div>
+                ))}
               </div>
             </div>
             <div>
