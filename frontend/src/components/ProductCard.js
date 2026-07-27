@@ -8,6 +8,7 @@ import { useCart } from '../lib/cart';
 import { useWishlist } from '../lib/wishlist';
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
+import FramedImage from './FramedImage';
 
 const FALLBACK = 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=800&q=80';
 
@@ -24,8 +25,7 @@ const ProductCard = ({ product }) => {
       data-testid="product-card">
       <div className="relative aspect-square bg-muted/40 overflow-hidden">
         <Link to={`/products/${product.slug || product.id}`}>
-          <img src={img} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover scale-110 blur-2xl opacity-60" onError={(e) => { e.target.src = FALLBACK; }} />
-          <img src={img} alt={product.name} loading="lazy" className="relative w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" onError={(e) => { e.target.src = FALLBACK; }} />
+          <FramedImage src={img} alt={product.name} fallback={FALLBACK} loading="lazy" className="group-hover:scale-105 transition-transform duration-300" />
         </Link>
         <button onClick={() => { toggle(product.id); toast.success(has(product.id) ? 'Removed from wishlist' : 'Added to wishlist'); }}
           data-testid="product-card-wishlist-toggle"

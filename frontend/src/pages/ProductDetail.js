@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Minus, Plus, ShoppingCart, Heart, MessageCircle, Star, ShieldCheck, Truck, Award, ChevronLeft, HelpCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import ProductCard from '../components/ProductCard';
+import FramedImage from '../components/FramedImage';
 import { useCart, computeUnitPrice } from '../lib/cart';
 import { useWishlist } from '../lib/wishlist';
 import { useSettings } from '../lib/settings';
@@ -149,8 +150,7 @@ export default function ProductDetail() {
             {/* Gallery */}
             <div>
               <div className="relative aspect-square rounded-2xl overflow-hidden border border-border bg-card">
-                <img src={images[activeImg] || FALLBACK} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover scale-110 blur-2xl opacity-60" onError={(e) => { e.target.src = FALLBACK; }} />
-                <img src={images[activeImg] || FALLBACK} alt={product.name} className="relative w-full h-full object-contain" onError={(e) => { e.target.src = FALLBACK; }} data-testid="product-main-image" />
+                <FramedImage src={images[activeImg] || FALLBACK} alt={product.name} fallback={FALLBACK} data-testid="product-main-image" />
               </div>
               {images.length > 1 && (
                 <div className="mt-3 flex gap-2 overflow-x-auto no-scrollbar">
