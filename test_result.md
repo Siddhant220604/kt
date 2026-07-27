@@ -6,6 +6,7 @@
 # BOTH MAIN_AGENT AND TESTING_AGENT MUST PRESERVE THIS ENTIRE BLOCK
 
 # Communication Protocol:
+
 # If the `testing_agent` is available, main agent should delegate all testing tasks to it.
 #
 # You have access to a file called `test_result.md`. This file contains the complete testing state
