@@ -1948,39 +1948,46 @@ async def places_autocomplete(q: str, request: Request, session: str = ''):
     q = (q or '').strip()
     if len(q) < 3 or not GOOGLE_MAPS_API_KEY:
         return {'suggestions': []}
-    params = {
+    body: Dict[str, Any] = {
         'input': q[:120],
-        'key': GOOGLE_MAPS_API_KEY,
-        'components': 'country:in',
+        'includedRegionCodes': ['in'],
+        'languageCode': 'en',
         # Bias (not restrict) results towards Lucknow - we only deliver there anyway.
-        'location': f'{LUCKNOW_CENTER_LAT},{LUCKNOW_CENTER_LNG}',
-        'radius': 30000,
-        'language': 'en',
+        'locationBias': {'circle': {
+            'center': {'latitude': LUCKNOW_CENTER_LAT, 'longitude': LUCKNOW_CENTER_LNG},
+            'radius': 30000.0,
+        }},
     }
     if session and _PLACES_SESSION_RE.fullmatch(session):
-        params['sessiontoken'] = session
+        body['sessionToken'] = session
     try:
         resp = await asyncio.to_thread(
-            requests.get,
-            'https://maps.googleapis.com/maps/api/place/autocomplete/json',
-            params=params, timeout=GOOGLE_MAPS_TIMEOUT,
+            requests.post,
+            'https://places.googleapis.com/v1/places:autocomplete',
+            json=body,
+            headers={'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY},
+            timeout=GOOGLE_MAPS_TIMEOUT,
         )
         data = resp.json()
     except Exception:
         logger.warning('Places autocomplete request failed for input: %s', q, exc_info=True)
         return {'suggestions': []}
-    if data.get('status') not in ('OK', 'ZERO_RESULTS'):
-        logger.warning('Places autocomplete returned status %s: %s', data.get('status'), data.get('error_message', ''))
+    if resp.status_code != 200:
+        logger.warning('Places autocomplete failed (%s): %s', resp.status_code, (data.get('error') or {}).get('message', ''))
         return {'suggestions': []}
-    return {'suggestions': [
-        {
-            'place_id': p.get('place_id', ''),
-            'main_text': (p.get('structured_formatting') or {}).get('main_text', ''),
-            'secondary_text': (p.get('structured_formatting') or {}).get('secondary_text', ''),
-            'description': p.get('description', ''),
-        }
-        for p in (data.get('predictions') or [])[:6] if p.get('place_id')
-    ]}
+    out = []
+    for s in (data.get('suggestions') or [])[:6]:
+        pred = s.get('placePrediction') or {}
+        if not pred.get('placeId'):
+            continue
+        fmt = pred.get('structuredFormat') or {}
+        out.append({
+            'place_id': pred['placeId'],
+            'main_text': (fmt.get('mainText') or {}).get('text', ''),
+            'secondary_text': (fmt.get('secondaryText') or {}).get('text', ''),
+            'description': (pred.get('text') or {}).get('text', ''),
+        })
+    return {'suggestions': out}
 
 
 @api_router.get('/places/details/{place_id}')
@@ -1990,35 +1997,36 @@ async def places_details(place_id: str, request: Request, session: str = ''):
         raise HTTPException(status_code=400, detail='Invalid place id')
     if not GOOGLE_MAPS_API_KEY:
         raise HTTPException(status_code=503, detail='Address lookup is not configured')
-    params = {
-        'place_id': place_id,
-        'key': GOOGLE_MAPS_API_KEY,
-        'fields': 'address_component,formatted_address,name',
-        'language': 'en',
-    }
+    params = {'languageCode': 'en'}
     if session and _PLACES_SESSION_RE.fullmatch(session):
-        params['sessiontoken'] = session
+        params['sessionToken'] = session
     try:
         resp = await asyncio.to_thread(
             requests.get,
-            'https://maps.googleapis.com/maps/api/place/details/json',
-            params=params, timeout=GOOGLE_MAPS_TIMEOUT,
+            f'https://places.googleapis.com/v1/places/{place_id}',
+            params=params,
+            headers={
+                'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
+                'X-Goog-FieldMask': 'addressComponents,formattedAddress,displayName',
+            },
+            timeout=GOOGLE_MAPS_TIMEOUT,
         )
         data = resp.json()
     except Exception:
         logger.warning('Places details request failed for %s', place_id, exc_info=True)
         raise HTTPException(status_code=502, detail='Address lookup failed')
-    if data.get('status') != 'OK' or not data.get('result'):
+    if resp.status_code != 200:
+        logger.warning('Places details failed (%s): %s', resp.status_code, (data.get('error') or {}).get('message', ''))
         raise HTTPException(status_code=502, detail='Address lookup failed')
-    result = data['result']
+    result = data
     comp: Dict[str, str] = {}
-    for c in result.get('address_components', []):
+    for c in result.get('addressComponents', []):
         for t in c.get('types', []):
-            comp.setdefault(t, c.get('long_name', ''))
+            comp.setdefault(t, c.get('longText', ''))
     line1 = ', '.join(p for p in [
         comp.get('subpremise'), comp.get('premise'), comp.get('street_number'), comp.get('route'),
     ] if p)
-    name = result.get('name', '')
+    name = (result.get('displayName') or {}).get('text', '')
     if name and name.lower() not in line1.lower():
         line1 = f'{name}, {line1}' if line1 else name
     line2 = ', '.join(p for p in [
@@ -2032,7 +2040,7 @@ async def places_details(place_id: str, request: Request, session: str = ''):
         'city': comp.get('locality') or comp.get('administrative_area_level_2', ''),
         'state': comp.get('administrative_area_level_1', ''),
         'pincode': comp.get('postal_code', ''),
-        'formatted_address': result.get('formatted_address', ''),
+        'formatted_address': result.get('formattedAddress', ''),
     }
 
 
