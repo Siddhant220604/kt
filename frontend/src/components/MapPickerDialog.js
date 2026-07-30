@@ -3,7 +3,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from './ui/button';
 import { Loader2, MapPin, Crosshair } from 'lucide-react';
 import { api } from '../lib/api';
-import { loadGoogleMaps, LUCKNOW_CENTER } from '../lib/googleMaps';
+import { loadGoogleMaps, LUCKNOW_CENTER, MAX_DELIVERY_RADIUS_KM, haversineKm } from '../lib/googleMaps';
+
+const OUTSIDE_MESSAGE = 'Delivery is not available at this address. We currently deliver only within Lucknow.';
 
 // Drop-a-pin dialog. The customer's typed address gets them to the right street; this gets the
 // rider to the right gate. Returns { lat, lng } to the caller on confirm.
@@ -13,20 +15,36 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
   const markerRef = useRef(null);
   const [pin, setPin] = useState(null);
   const [nearby, setNearby] = useState('');
+  const [outside, setOutside] = useState('');
+  const [checking, setChecking] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Look up what sits at the pin so the customer can sanity-check it before confirming.
+  // Look up what sits at the pin, both so the customer can sanity-check it and so a pin outside
+  // Lucknow is refused here rather than after they've filled in the rest of the form.
   useEffect(() => {
     if (!pin) return;
     let cancelled = false;
     setNearby('');
+    setOutside('');
+    // Anything past the delivery radius is refusable without asking Google at all, which also
+    // covers pins in the middle of nowhere where the lookup finds no place to name.
+    if (haversineKm(pin, LUCKNOW_CENTER) > MAX_DELIVERY_RADIUS_KM) {
+      setOutside(OUTSIDE_MESSAGE);
+      return;
+    }
+    setChecking(true);
     const t = setTimeout(() => {
       api.get('/places/reverse', { params: { lat: pin.lat, lng: pin.lng } })
-        .then(({ data }) => { if (!cancelled) setNearby(data.formatted_address || ''); })
-        .catch(() => {});
+        .then(({ data }) => {
+          if (cancelled) return;
+          setNearby(data.formatted_address || '');
+          setOutside(data.deliverable === false ? (data.reason || OUTSIDE_MESSAGE) : '');
+        })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setChecking(false); });
     }, 400);
-    return () => { cancelled = true; clearTimeout(t); };
+    return () => { cancelled = true; clearTimeout(t); setChecking(false); };
   }, [pin]);
 
   useEffect(() => {
@@ -70,7 +88,7 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
 
   // Drop the map instance when the dialog closes so reopening rebuilds it against a fresh node.
   useEffect(() => {
-    if (!open) { mapRef.current = null; markerRef.current = null; setPin(null); setNearby(''); }
+    if (!open) { mapRef.current = null; markerRef.current = null; setPin(null); setNearby(''); setOutside(''); setChecking(false); }
   }, [open]);
 
   const useMyLocation = () => {
@@ -119,13 +137,19 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
           </button>
           {pin && <span className="text-muted-foreground">{pin.lat.toFixed(5)}, {pin.lng.toFixed(5)}</span>}
         </div>
-        {nearby && <div className="text-xs text-muted-foreground">Pin is near: {nearby}</div>}
+        {nearby && !outside && <div className="text-xs text-muted-foreground">Pin is near: {nearby}</div>}
+        {outside && (
+          <div className="text-sm text-red-600 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
+            data-testid="map-picker-outside">
+            {outside}
+          </div>
+        )}
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button type="button" disabled={!pin || !!error} data-testid="map-picker-confirm"
+          <Button type="button" disabled={!pin || !!error || !!outside || checking} data-testid="map-picker-confirm"
             onClick={() => { onConfirm(pin, nearby); onOpenChange(false); }}>
-            Confirm location
+            {checking ? 'Checking…' : 'Confirm location'}
           </Button>
         </DialogFooter>
       </DialogContent>

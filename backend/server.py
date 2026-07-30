@@ -1915,9 +1915,15 @@ async def calculate_delivery_charge(address) -> Dict[str, Any]:
     pin_lat, pin_lng = getattr(address, 'lat', None), getattr(address, 'lng', None)
     if pin_lat is not None and pin_lng is not None:
         dest_lat, dest_lng = pin_lat, pin_lng
-        # The pin is inside our radius or it isn't; the city name check below is what the
-        # geocode was for, and the typed city is already validated to be Lucknow.
-        resolved_city = (getattr(address, 'city', '') or '').strip().lower()
+        # Ask what's actually at the pin rather than trusting the typed city - "Use my current
+        # location" from Kanpur still submits city="Lucknow", and a point can sit inside our
+        # radius while belonging to a neighbouring district. If the lookup itself is
+        # unavailable, fall through to the radius check alone rather than refusing the order.
+        place = await _reverse_lookup(dest_lat, dest_lng)
+        pin_city = (place.get('city') or '').strip().lower() if place else ''
+        # Empty means the lookup failed or found nothing nameable; treat that as inconclusive
+        # and let the radius check below decide on its own.
+        resolved_city = pin_city or 'lucknow'
     else:
         geocode = await _geocode_address(full_address)
         if geocode is None:
@@ -2111,47 +2117,71 @@ async def places_details(place_id: str, request: Request, session: str = ''):
     }
 
 
+async def _reverse_lookup(lat: float, lng: float) -> Optional[Dict[str, str]]:
+    """What sits at a set of coordinates, via Places Nearby Search - the legacy Geocoding API
+    can't be enabled on projects created after Google's cutoff, and the nearest place carries a
+    usable street address anyway. Widening circles because a rural pin can have nothing within
+    a block of it. Returns None when the lookup itself failed, so callers can tell "nothing is
+    there" apart from "we couldn't check"."""
+    if not GOOGLE_MAPS_API_KEY:
+        return None
+    for radius in (150.0, 1000.0, 5000.0):
+        try:
+            resp = await asyncio.to_thread(
+                requests.post,
+                'https://places.googleapis.com/v1/places:searchNearby',
+                json={
+                    'locationRestriction': {'circle': {'center': {'latitude': lat, 'longitude': lng}, 'radius': radius}},
+                    'maxResultCount': 1,
+                    'rankPreference': 'DISTANCE',
+                    'languageCode': 'en',
+                },
+                headers={
+                    'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
+                    'X-Goog-FieldMask': 'places.formattedAddress,places.addressComponents',
+                },
+                timeout=GOOGLE_MAPS_TIMEOUT,
+            )
+            data = resp.json()
+        except Exception:
+            logger.warning('Reverse lookup failed for (%s,%s)', lat, lng, exc_info=True)
+            return None
+        if resp.status_code != 200:
+            logger.warning('Reverse lookup failed (%s): %s', resp.status_code, (data.get('error') or {}).get('message', ''))
+            return None
+        places = data.get('places') or []
+        if not places:
+            continue
+        comp: Dict[str, str] = {}
+        for c in places[0].get('addressComponents', []):
+            for t in c.get('types', []):
+                comp.setdefault(t, c.get('longText', ''))
+        return {
+            'formatted_address': places[0].get('formattedAddress', ''),
+            'pincode': comp.get('postal_code', ''),
+            'city': comp.get('locality') or comp.get('administrative_area_level_2', ''),
+        }
+    return {'formatted_address': '', 'pincode': '', 'city': ''}
+
+
 @api_router.get('/places/reverse')
 async def places_reverse(lat: float, lng: float, request: Request):
-    """Describe what sits at a dropped map pin, so the customer can sanity-check it before
-    confirming. Uses Places Nearby Search - the legacy Geocoding API can't be enabled on
-    projects created after Google's cutoff, and this returns a usable street address anyway."""
+    """Describe a dropped map pin so the customer can sanity-check it, and say up front whether
+    we deliver there - stopping them at the map beats letting them fill the whole form first."""
     dependencies.check_rate_limit(request, 'places_reverse', *rate_limits.get_bucket_limit('places_reverse', 60, 60))
     if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
         raise HTTPException(status_code=400, detail='Invalid coordinates')
-    if not GOOGLE_MAPS_API_KEY:
-        return {'formatted_address': '', 'pincode': '', 'city': ''}
-    try:
-        resp = await asyncio.to_thread(
-            requests.post,
-            'https://places.googleapis.com/v1/places:searchNearby',
-            json={
-                'locationRestriction': {'circle': {'center': {'latitude': lat, 'longitude': lng}, 'radius': 150.0}},
-                'maxResultCount': 1,
-                'rankPreference': 'DISTANCE',
-                'languageCode': 'en',
-            },
-            headers={
-                'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
-                'X-Goog-FieldMask': 'places.formattedAddress,places.addressComponents',
-            },
-            timeout=GOOGLE_MAPS_TIMEOUT,
-        )
-        data = resp.json()
-    except Exception:
-        logger.warning('Reverse lookup failed for (%s,%s)', lat, lng, exc_info=True)
-        return {'formatted_address': '', 'pincode': '', 'city': ''}
-    if resp.status_code != 200 or not (data.get('places') or []):
-        return {'formatted_address': '', 'pincode': '', 'city': ''}
-    place = data['places'][0]
-    comp: Dict[str, str] = {}
-    for c in place.get('addressComponents', []):
-        for t in c.get('types', []):
-            comp.setdefault(t, c.get('longText', ''))
+    place = await _reverse_lookup(lat, lng)
+    if place is None:
+        # Couldn't check - don't claim the pin is undeliverable; the estimate call still gates it.
+        return {'formatted_address': '', 'pincode': '', 'city': '', 'deliverable': True, 'checked': False}
+    city = (place.get('city') or '').strip().lower()
+    deliverable = ('lucknow' in city) if city else True
     return {
-        'formatted_address': place.get('formattedAddress', ''),
-        'pincode': comp.get('postal_code', ''),
-        'city': comp.get('locality') or comp.get('administrative_area_level_2', ''),
+        **place,
+        'deliverable': deliverable,
+        'checked': bool(city),
+        'reason': None if deliverable else DELIVERY_UNAVAILABLE_MESSAGE,
     }
 
 
