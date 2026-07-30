@@ -35,13 +35,13 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
     setLoading(true);
     setError('');
 
-    loadGoogleMaps().then((maps) => {
+    loadGoogleMaps().then(({ Map, Marker }) => {
       if (cancelled || !mapNodeRef.current) return;
       const start = (initial && initial.lat != null && initial.lng != null)
         ? { lat: Number(initial.lat), lng: Number(initial.lng) }
         : LUCKNOW_CENTER;
 
-      const map = new maps.Map(mapNodeRef.current, {
+      const map = new Map(mapNodeRef.current, {
         center: start,
         zoom: (initial && initial.lat != null) ? 17 : 13,
         mapTypeControl: false,
@@ -49,7 +49,7 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
         fullscreenControl: false,
         clickableIcons: false,
       });
-      const marker = new maps.Marker({ position: start, map, draggable: true });
+      const marker = new Marker({ position: start, map, draggable: true });
       marker.addListener('dragend', (e) => setPin({ lat: e.latLng.lat(), lng: e.latLng.lng() }));
       map.addListener('click', (e) => {
         marker.setPosition(e.latLng);

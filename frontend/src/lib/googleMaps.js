@@ -7,19 +7,33 @@ let loader = null;
 
 export const mapsAvailable = () => !!MAPS_BROWSER_KEY;
 
+// With loading=async the bootstrap script only installs google.maps.importLibrary; the actual
+// classes arrive when a library is imported. Resolving before that gives you a google.maps
+// object whose Map is undefined ("t.Map is not a constructor").
+const importClasses = async () => {
+  const [mapsLib, markerLib] = await Promise.all([
+    window.google.maps.importLibrary('maps'),
+    window.google.maps.importLibrary('marker'),
+  ]);
+  const Map = mapsLib.Map;
+  const Marker = markerLib.Marker || window.google.maps.Marker;
+  if (!Map || !Marker) throw new Error('Google Maps loaded without the map classes');
+  return { Map, Marker };
+};
+
 export const loadGoogleMaps = () => {
   if (!MAPS_BROWSER_KEY) return Promise.reject(new Error('Google Maps browser key is not configured'));
-  if (window.google && window.google.maps) return Promise.resolve(window.google.maps);
   if (loader) return loader;
+  if (window.google && window.google.maps && window.google.maps.importLibrary) {
+    loader = importClasses();
+    return loader;
+  }
 
   loader = new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(MAPS_BROWSER_KEY)}&v=weekly&loading=async`;
     script.async = true;
-    script.onload = () => {
-      if (window.google && window.google.maps) resolve(window.google.maps);
-      else reject(new Error('Google Maps failed to initialise'));
-    };
+    script.onload = () => importClasses().then(resolve, (err) => { loader = null; reject(err); });
     script.onerror = () => {
       // Let a later attempt retry rather than caching the failure forever.
       loader = null;

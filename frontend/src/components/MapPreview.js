@@ -10,10 +10,10 @@ export default function MapPreview({ lat, lng, height = 200, zoom = 16, classNam
   useEffect(() => {
     if (!mapsAvailable() || lat == null || lng == null) return;
     let cancelled = false;
-    loadGoogleMaps().then((maps) => {
+    loadGoogleMaps().then(({ Map, Marker }) => {
       if (cancelled || !nodeRef.current) return;
       const position = { lat: Number(lat), lng: Number(lng) };
-      const map = new maps.Map(nodeRef.current, {
+      const map = new Map(nodeRef.current, {
         center: position,
         zoom,
         mapTypeControl: false,
@@ -21,7 +21,7 @@ export default function MapPreview({ lat, lng, height = 200, zoom = 16, classNam
         fullscreenControl: true,
         clickableIcons: false,
       });
-      new maps.Marker({ position, map });
+      new Marker({ position, map });
     }).catch((err) => {
       if (!cancelled) setError(err.message || 'Map unavailable');
     });
