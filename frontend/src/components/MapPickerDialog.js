@@ -6,6 +6,10 @@ import { api } from '../lib/api';
 import { loadGoogleMaps, LUCKNOW_CENTER, MAX_DELIVERY_RADIUS_KM, haversineKm } from '../lib/googleMaps';
 
 const OUTSIDE_MESSAGE = 'Delivery is not available at this address. We currently deliver only within Lucknow.';
+// A GPS fix is accurate to tens of metres; an IP-derived one to tens of kilometres. Anything
+// past the coarse threshold is not a location, it's a guess at a city.
+const COARSE_FIX_METRES = 3000;
+const PRECISE_FIX_METRES = 100;
 
 // Drop-a-pin dialog. The customer's typed address gets them to the right street; this gets the
 // rider to the right gate. Returns { lat, lng } to the caller on confirm.
@@ -113,12 +117,31 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
     const onFound = ({ coords }) => {
       setLocating(false);
       const here = { lat: coords.latitude, lng: coords.longitude };
+      const accuracy = coords.accuracy || 0;
+
+      // With no GPS or WiFi to go on, browsers fall back to locating by IP address, which in
+      // India lands on whichever city the ISP routes through - a Lucknow customer on a desktop
+      // routinely gets pinned in Delhi. Such a fix reports an accuracy of many kilometres, so
+      // refuse it outright: a pin that is confidently wrong is worse than no pin, and it would
+      // otherwise trip the "we don't deliver here" message for a customer who is in Lucknow.
+      if (accuracy > COARSE_FIX_METRES) {
+        setGeoError(
+          `Your browser could only locate you to within ${Math.round(accuracy / 1000)} km, which is too rough to deliver to`
+          + ' - this usually happens on a desktop or over a VPN. Please drag the pin to your exact spot,'
+          + ' or open the site on your phone.',
+        );
+        return;
+      }
+
       if (mapRef.current && markerRef.current) {
         mapRef.current.setCenter(here);
         mapRef.current.setZoom(17);
         markerRef.current.setPosition(here);
       }
       setPin(here);
+      setGeoError(accuracy > PRECISE_FIX_METRES
+        ? `Located you to within about ${Math.round(accuracy)} m - drag the pin if it isn't exactly your gate.`
+        : '');
     };
     const onFailed = (err) => {
       setLocating(false);
