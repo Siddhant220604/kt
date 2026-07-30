@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { Container, Section } from '../components/site/Section';
 import { Button } from '../components/ui/button';
@@ -10,10 +10,8 @@ import { toast } from 'sonner';
 import { useCart } from '../lib/cart';
 import { useSettings } from '../lib/settings';
 import { api, formatINR } from '../lib/api';
-import { Wallet, ChevronLeft, ShoppingBag, MapPin } from 'lucide-react';
-
-const newPlacesSession = () =>
-  (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+import { Wallet, ChevronLeft, ShoppingBag } from 'lucide-react';
+import AddressPicker from '../components/AddressPicker';
 
 export default function Checkout() {
   const { items, subtotal, clear } = useCart();
@@ -23,7 +21,7 @@ export default function Checkout() {
   const [placing, setPlacing] = useState(false);
   const [payment, setPayment] = useState('cod');
   const [form, setForm] = useState({
-    name: '', mobile: '', email: '', address_line1: '', address_line2: '', city: 'Lucknow', state: 'Uttar Pradesh', pincode: '', landmark: '', gst_number: '', notes: '',
+    name: '', mobile: '', email: '', address_line1: '', address_line2: '', city: 'Lucknow', state: 'Uttar Pradesh', pincode: '', landmark: '', gst_number: '', notes: '', lat: null, lng: null,
   });
   const [coupon, setCoupon] = useState(loc.state?.coupon || '');
   const [discount, setDiscount] = useState(loc.state?.discount || 0);
@@ -37,15 +35,10 @@ export default function Checkout() {
   const [checkingDelivery, setCheckingDelivery] = useState(false);
   const [pincodeValid, setPincodeValid] = useState(null);
   const [pincodeReason, setPincodeReason] = useState(null);
-  const [addrSuggestions, setAddrSuggestions] = useState([]);
-  const [addrOpen, setAddrOpen] = useState(false);
-  // Address Line 1 must come from a picked Google suggestion (or a previously saved address),
-  // never free text - a typo'd street silently geocodes to the wrong place and misprices delivery.
+  // Address Line 1 must come from a picked Google suggestion or a dropped map pin (or a
+  // previously saved address), never free text - a typo'd street silently geocodes to the
+  // wrong place and misprices delivery.
   const [addrVerified, setAddrVerified] = useState(false);
-  const addrSessionRef = useRef(newPlacesSession());
-  // Skips one suggestions-fetch cycle when address_line1 was set programmatically
-  // (saved address applied / suggestion picked) rather than typed.
-  const addrProgrammaticRef = useRef(false);
   const freeShipAbove = settings.free_shipping_above || 2000;
   const cityValid = form.city.trim().toLowerCase() === 'lucknow';
   const stateValid = form.state.trim().toLowerCase() === 'uttar pradesh';
@@ -75,6 +68,7 @@ export default function Checkout() {
         const { data } = await api.post('/delivery/estimate', {
           address_line1: form.address_line1, address_line2: form.address_line2 || '',
           city: form.city, state: form.state, pincode: form.pincode,
+          lat: form.lat ?? null, lng: form.lng ?? null,
         });
         setDeliveryEstimate(data);
       } catch (err) {
@@ -84,7 +78,7 @@ export default function Checkout() {
       }
     }, 700);
     return () => clearTimeout(t);
-  }, [addrVerified, form.address_line1, form.address_line2, form.city, form.state, form.pincode]);
+  }, [addrVerified, form.address_line1, form.address_line2, form.city, form.state, form.pincode, form.lat, form.lng]);
 
   // Verify the pincode actually exists (via India Post lookup on the backend) rather than just
   // checking it's 6 digits - best-effort, fails open if the lookup itself is unavailable.
@@ -106,48 +100,6 @@ export default function Checkout() {
     return () => { cancelled = true; clearTimeout(t); };
   }, [form.pincode]);
 
-  // Live Google Places suggestions while the customer types Address Line 1 (proxied via our
-  // backend so the API key stays server-side). Debounced and best-effort.
-  useEffect(() => {
-    if (addrProgrammaticRef.current) { addrProgrammaticRef.current = false; return; }
-    const q = form.address_line1.trim();
-    if (q.length < 3) { setAddrSuggestions([]); setAddrOpen(false); return; }
-    const t = setTimeout(async () => {
-      try {
-        const { data } = await api.get('/places/autocomplete', { params: { q, session: addrSessionRef.current } });
-        setAddrSuggestions(data.suggestions || []);
-        setAddrOpen((data.suggestions || []).length > 0);
-      } catch {
-        setAddrSuggestions([]);
-      }
-    }, 350);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.address_line1]);
-
-  const pickSuggestion = async (s) => {
-    setAddrOpen(false);
-    setAddrSuggestions([]);
-    addrProgrammaticRef.current = true;
-    try {
-      const { data } = await api.get(`/places/details/${s.place_id}`, { params: { session: addrSessionRef.current } });
-      // A Places session ends at the first details call - start a fresh one for the next search.
-      addrSessionRef.current = newPlacesSession();
-      // Line 2 is deliberately left alone - it's the customer's flat/floor/landmark detail.
-      setForm(f => ({
-        ...f,
-        address_line1: data.address_line1 || s.description || s.main_text,
-        city: data.city || f.city,
-        state: data.state || f.state,
-        pincode: /^\d{6}$/.test(data.pincode || '') ? data.pincode : f.pincode,
-      }));
-      setAddrVerified(true);
-    } catch {
-      setForm(f => ({ ...f, address_line1: s.description || s.main_text }));
-      setAddrVerified(true);
-    }
-  };
-
   const loadRazorpayScript = () => new Promise((resolve, reject) => {
     if (window.Razorpay) return resolve();
     const script = document.createElement('script');
@@ -159,6 +111,7 @@ export default function Checkout() {
   });
 
   const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const patch = (fields) => setForm(f => ({ ...f, ...fields }));
 
   const couponStatus = (c) => {
     const now = new Date();
@@ -188,20 +141,20 @@ export default function Checkout() {
   }, []);
 
   const applyAddress = (a) => {
-    addrProgrammaticRef.current = true;
     setAddrVerified(true);
     setSelectedAddressId(a.id);
     setForm(f => ({
       ...f,
       name: a.name, mobile: a.mobile, address_line1: a.address_line1, address_line2: a.address_line2 || '',
       city: a.city, state: a.state, pincode: a.pincode, landmark: a.landmark || '', gst_number: a.gst_number || '',
+      lat: a.lat ?? null, lng: a.lng ?? null,
     }));
   };
 
   const useNewAddress = () => {
     setSelectedAddressId('new');
     setAddrVerified(false);
-    setForm(f => ({ ...f, address_line1: '', address_line2: '', city: 'Lucknow', state: 'Uttar Pradesh', pincode: '', landmark: '', gst_number: '' }));
+    setForm(f => ({ ...f, address_line1: '', address_line2: '', city: 'Lucknow', state: 'Uttar Pradesh', pincode: '', landmark: '', gst_number: '', lat: null, lng: null }));
   };
 
   // Pre-fill delivery details from the signed-in customer's account (checkout is now only
@@ -274,7 +227,7 @@ export default function Checkout() {
           product_id: i.product_id, name: i.name, price: i.price, size: i.size, unit: i.unit,
           image: i.image, quantity: i.quantity, moq: i.moq,
         })),
-        address: { name: form.name, mobile: form.mobile, email: form.email, address_line1: form.address_line1, address_line2: form.address_line2, city: form.city, state: form.state, pincode: form.pincode, landmark: form.landmark, gst_number: form.gst_number },
+        address: { name: form.name, mobile: form.mobile, email: form.email, address_line1: form.address_line1, address_line2: form.address_line2, city: form.city, state: form.state, pincode: form.pincode, landmark: form.landmark, gst_number: form.gst_number, lat: form.lat ?? null, lng: form.lng ?? null },
         payment_method: payment,
         notes: form.notes,
         coupon_code: applied,
@@ -402,34 +355,14 @@ export default function Checkout() {
                 <div><Label className="text-xs text-muted-foreground">Full Name *</Label><Input required value={form.name} onChange={(e) => upd('name', e.target.value)} data-testid="checkout-name-input" /></div>
                 <div><Label className="text-xs text-muted-foreground">Mobile Number *</Label><Input required inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} value={form.mobile} onChange={(e) => upd('mobile', e.target.value.replace(/[^0-9]/g, ''))} data-testid="checkout-mobile-input" /></div>
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Email *</Label><Input required type="email" value={form.email} onChange={(e) => upd('email', e.target.value)} data-testid="checkout-email-input" /></div>
-                <div className="sm:col-span-2 relative">
-                  <Label className="text-xs text-muted-foreground">Address Line 1 *</Label>
-                  <Input required value={form.address_line1} autoComplete="off"
-                    onChange={(e) => { setAddrVerified(false); upd('address_line1', e.target.value); }}
-                    aria-invalid={!!form.address_line1 && !addrVerified}
-                    onFocus={() => addrSuggestions.length > 0 && setAddrOpen(true)}
-                    onBlur={() => setTimeout(() => setAddrOpen(false), 150)}
-                    data-testid="checkout-address-line1-input" placeholder="House / Shop No., Street — start typing to search" />
-                  {addrOpen && addrSuggestions.length > 0 && (
-                    <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-card border border-border rounded-xl shadow-lg overflow-hidden" data-testid="address-suggestions">
-                      {addrSuggestions.map(s => (
-                        <button key={s.place_id} type="button"
-                          onMouseDown={(e) => { e.preventDefault(); pickSuggestion(s); }}
-                          className="w-full text-left px-3 py-2.5 hover:bg-muted flex items-start gap-2 border-b border-border/50 last:border-b-0">
-                          <MapPin className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium truncate">{s.main_text}</span>
-                            <span className="block text-xs text-muted-foreground truncate">{s.secondary_text}</span>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {addrVerified
-                    ? <div className="text-xs text-emerald-600 mt-1">Address confirmed from map</div>
-                    : <div className="text-xs text-muted-foreground mt-1">Start typing and pick your address from the suggestions</div>}
-                </div>
-                <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 2</Label><Input value={form.address_line2} onChange={(e) => upd('address_line2', e.target.value)} placeholder="Area, Locality" /></div>
+                <AddressPicker
+                  value={form}
+                  onChange={patch}
+                  verified={addrVerified}
+                  onVerifiedChange={setAddrVerified}
+                  testIdPrefix="checkout-address"
+                />
+                <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 2</Label><Input value={form.address_line2} onChange={(e) => upd('address_line2', e.target.value)} placeholder="Flat / Floor / Landmark" /></div>
                 <div>
                   <Label className="text-xs text-muted-foreground">City *</Label>
                   <Input required value={form.city} onChange={(e) => upd('city', e.target.value)} aria-invalid={!cityValid} data-testid="checkout-city-input" />

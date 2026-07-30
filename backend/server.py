@@ -447,6 +447,10 @@ class AddressIn(BaseModel):
     pincode: str = Field(pattern=INDIAN_PINCODE_REGEX)
     landmark: Optional[str] = Field('', max_length=200)
     gst_number: Optional[str] = Field('', max_length=20)
+    # Exact delivery pin the customer dropped on the map - what the rider actually navigates to,
+    # since a typed address in Lucknow often resolves only to the street.
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
 
     @field_validator('gst_number')
     @classmethod
@@ -582,6 +586,8 @@ class SavedAddressIn(BaseModel):
     pincode: str = Field(pattern=INDIAN_PINCODE_REGEX)
     landmark: Optional[str] = Field('', max_length=200)
     gst_number: Optional[str] = Field(None, max_length=20)
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
     is_default: bool = False
 
     @field_validator('gst_number')
@@ -601,6 +607,8 @@ class SavedAddressUpdate(BaseModel):
     pincode: Optional[str] = Field(None, pattern=INDIAN_PINCODE_REGEX)
     landmark: Optional[str] = Field(None, max_length=200)
     gst_number: Optional[str] = Field(None, max_length=20)
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
     is_default: Optional[bool] = None
 
     @field_validator('gst_number')
@@ -1760,6 +1768,8 @@ class DeliveryEstimateIn(BaseModel):
     city: str = Field('', max_length=100)
     state: str = Field('', max_length=100)
     pincode: str = Field('', max_length=10)
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
 
 
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -1900,13 +1910,21 @@ async def calculate_delivery_charge(address) -> Dict[str, Any]:
         return {'distance_km': 0.0, 'shipping': shipping_flat, 'delivery_allowed': True, 'reason': None, 'used_fallback': True}
 
     full_address = _format_full_address(address)
-    geocode = await _geocode_address(full_address)
-    if geocode is None:
-        logger.warning('Falling back to flat shipping - could not geocode address: %s', full_address)
-        return {'distance_km': 0.0, 'shipping': shipping_flat, 'delivery_allowed': True, 'reason': None, 'used_fallback': True}
-
-    dest_lat, dest_lng = geocode['lat'], geocode['lng']
-    resolved_city = (geocode.get('city') or '').strip().lower()
+    # A pin the customer dropped on the map beats geocoding their typed address - it's the
+    # actual doorstep, so bill and route from it when we have it.
+    pin_lat, pin_lng = getattr(address, 'lat', None), getattr(address, 'lng', None)
+    if pin_lat is not None and pin_lng is not None:
+        dest_lat, dest_lng = pin_lat, pin_lng
+        # The pin is inside our radius or it isn't; the city name check below is what the
+        # geocode was for, and the typed city is already validated to be Lucknow.
+        resolved_city = (getattr(address, 'city', '') or '').strip().lower()
+    else:
+        geocode = await _geocode_address(full_address)
+        if geocode is None:
+            logger.warning('Falling back to flat shipping - could not geocode address: %s', full_address)
+            return {'distance_km': 0.0, 'shipping': shipping_flat, 'delivery_allowed': True, 'reason': None, 'used_fallback': True}
+        dest_lat, dest_lng = geocode['lat'], geocode['lng']
+        resolved_city = (geocode.get('city') or '').strip().lower()
     straight_line_km = _haversine_km(shop_lat, shop_lng, dest_lat, dest_lng)
 
     if 'lucknow' not in resolved_city or straight_line_km > MAX_DELIVERY_RADIUS_KM:
@@ -2042,7 +2060,7 @@ async def places_details(place_id: str, request: Request, session: str = ''):
             params=params,
             headers={
                 'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
-                'X-Goog-FieldMask': 'addressComponents,formattedAddress,displayName',
+                'X-Goog-FieldMask': 'addressComponents,formattedAddress,displayName,location',
             },
             timeout=GOOGLE_MAPS_TIMEOUT,
         )
@@ -2088,6 +2106,52 @@ async def places_details(place_id: str, request: Request, session: str = ''):
         'state': comp.get('administrative_area_level_1', ''),
         'pincode': comp.get('postal_code', ''),
         'formatted_address': result.get('formattedAddress', ''),
+        'lat': (result.get('location') or {}).get('latitude'),
+        'lng': (result.get('location') or {}).get('longitude'),
+    }
+
+
+@api_router.get('/places/reverse')
+async def places_reverse(lat: float, lng: float, request: Request):
+    """Describe what sits at a dropped map pin, so the customer can sanity-check it before
+    confirming. Uses Places Nearby Search - the legacy Geocoding API can't be enabled on
+    projects created after Google's cutoff, and this returns a usable street address anyway."""
+    dependencies.check_rate_limit(request, 'places_reverse', *rate_limits.get_bucket_limit('places_reverse', 60, 60))
+    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail='Invalid coordinates')
+    if not GOOGLE_MAPS_API_KEY:
+        return {'formatted_address': '', 'pincode': '', 'city': ''}
+    try:
+        resp = await asyncio.to_thread(
+            requests.post,
+            'https://places.googleapis.com/v1/places:searchNearby',
+            json={
+                'locationRestriction': {'circle': {'center': {'latitude': lat, 'longitude': lng}, 'radius': 150.0}},
+                'maxResultCount': 1,
+                'rankPreference': 'DISTANCE',
+                'languageCode': 'en',
+            },
+            headers={
+                'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
+                'X-Goog-FieldMask': 'places.formattedAddress,places.addressComponents',
+            },
+            timeout=GOOGLE_MAPS_TIMEOUT,
+        )
+        data = resp.json()
+    except Exception:
+        logger.warning('Reverse lookup failed for (%s,%s)', lat, lng, exc_info=True)
+        return {'formatted_address': '', 'pincode': '', 'city': ''}
+    if resp.status_code != 200 or not (data.get('places') or []):
+        return {'formatted_address': '', 'pincode': '', 'city': ''}
+    place = data['places'][0]
+    comp: Dict[str, str] = {}
+    for c in place.get('addressComponents', []):
+        for t in c.get('types', []):
+            comp.setdefault(t, c.get('longText', ''))
+    return {
+        'formatted_address': place.get('formattedAddress', ''),
+        'pincode': comp.get('postal_code', ''),
+        'city': comp.get('locality') or comp.get('administrative_area_level_2', ''),
     }
 
 

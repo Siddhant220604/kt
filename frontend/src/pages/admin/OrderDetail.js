@@ -5,8 +5,10 @@ import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Textarea } from '../../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
-import { ChevronLeft, FileText, MessageCircle } from 'lucide-react';
+import { ChevronLeft, FileText, MessageCircle, Navigation, MapPin } from 'lucide-react';
 import { toast } from 'sonner';
+import MapPreview from '../../components/MapPreview';
+import { mapsDirectionsUrl } from '../../lib/googleMaps';
 
 const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', processing: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
 
@@ -168,6 +170,34 @@ export default function AdminOrderDetail() {
                 {order.address.landmark && <span className="text-xs">Landmark: {order.address.landmark}</span>}
               </div>
             </div>
+          </div>
+          <div className="bg-card border border-border rounded-2xl p-4">
+            <div className="font-display font-semibold mb-2 flex items-center gap-2"><MapPin className="h-4 w-4" />Delivery Location</div>
+            {order.address.lat != null && order.address.lng != null ? (
+              <>
+                <MapPreview lat={order.address.lat} lng={order.address.lng} height={190} className="mb-3" />
+                <a href={mapsDirectionsUrl(order.address.lat, order.address.lng)} target="_blank" rel="noreferrer" data-testid="order-directions-link">
+                  <Button size="sm" className="w-full"><Navigation className="h-3.5 w-3.5 mr-1.5" />Get directions</Button>
+                </a>
+                <div className="text-[11px] text-muted-foreground text-center mt-2">
+                  Pinned by customer · {Number(order.address.lat).toFixed(5)}, {Number(order.address.lng).toFixed(5)}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-muted-foreground mb-3">
+                  This order has no map pin - it was placed before pinning existed, or the customer skipped it. Searching the typed address instead.
+                </div>
+                <a
+                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                    [order.address.address_line1, order.address.address_line2, order.address.city, order.address.state, order.address.pincode].filter(Boolean).join(', '),
+                  )}`}
+                  target="_blank" rel="noreferrer"
+                >
+                  <Button size="sm" variant="outline" className="w-full"><Navigation className="h-3.5 w-3.5 mr-1.5" />Search address on Maps</Button>
+                </a>
+              </>
+            )}
           </div>
           <div className="bg-card border border-border rounded-2xl p-4 text-sm">
             <div className="font-display font-semibold mb-2">Payment</div>

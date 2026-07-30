@@ -11,11 +11,13 @@ import { User, MapPin, Mail, LockKeyhole, LogOut, Package, Plus, Pencil, Trash2,
 import { toast } from 'sonner';
 import { api, formatINR, logoutCustomer } from '../lib/api';
 import { useWishlist } from '../lib/wishlist';
+import AddressPicker from '../components/AddressPicker';
+import { mapsPlaceUrl } from '../lib/googleMaps';
 
 const statusColor = { pending: 'bg-amber-500/10 text-amber-700 border-amber-500/20', confirmed: 'bg-sky-500/10 text-sky-700 border-sky-500/20', processing: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/20', packed: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20', 'out for delivery': 'bg-purple-500/10 text-purple-700 border-purple-500/20', delivered: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20', cancelled: 'bg-red-500/10 text-red-700 border-red-500/20' };
 
 const emptyProfile = { name: '', email: '', mobile: '' };
-const emptyAddress = { label: '', name: '', mobile: '', address_line1: '', address_line2: '', city: '', state: '', pincode: '', landmark: '', gst_number: '', is_default: false };
+const emptyAddress = { label: '', name: '', mobile: '', address_line1: '', address_line2: '', city: 'Lucknow', state: 'Uttar Pradesh', pincode: '', landmark: '', gst_number: '', lat: null, lng: null, is_default: false };
 
 export default function Account() {
   const nav = useNavigate();
@@ -34,6 +36,8 @@ export default function Account() {
   const [addrForm, setAddrForm] = useState(null); // null = hidden, object = editing/adding
   const [editingId, setEditingId] = useState(null);
   const [savingAddr, setSavingAddr] = useState(false);
+  // Line 1 has to come from a Google suggestion or a dropped map pin, same rule as checkout.
+  const [addrVerified, setAddrVerified] = useState(false);
 
   const loadAddresses = () => {
     setLoadingAddresses(true);
@@ -52,6 +56,7 @@ export default function Account() {
 
   const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const updAddr = (k, v) => setAddrForm(f => ({ ...f, [k]: v }));
+  const patchAddr = (fields) => setAddrForm(f => ({ ...f, ...fields }));
 
   const saveProfile = async (e) => {
     e.preventDefault();
@@ -66,13 +71,23 @@ export default function Account() {
     finally { setSavingProfile(false); }
   };
 
-  const startAddAddress = () => { setEditingId(null); setAddrForm({ ...emptyAddress, name: profile.name || '', mobile: profile.mobile || '' }); };
-  const startEditAddress = (a) => { setEditingId(a.id); setAddrForm({ ...emptyAddress, ...a }); };
-  const cancelAddress = () => { setAddrForm(null); setEditingId(null); };
+  const startAddAddress = () => {
+    setEditingId(null);
+    setAddrVerified(false);
+    setAddrForm({ ...emptyAddress, name: profile.name || '', mobile: profile.mobile || '' });
+  };
+  const startEditAddress = (a) => {
+    setEditingId(a.id);
+    // An address that's already saved was verified when it was created.
+    setAddrVerified(true);
+    setAddrForm({ ...emptyAddress, ...a });
+  };
+  const cancelAddress = () => { setAddrForm(null); setEditingId(null); setAddrVerified(false); };
 
   const saveAddress = async (e) => {
     e.preventDefault();
     if (!/^[6-9]\d{9}$/.test(addrForm.mobile)) return toast.error('Enter a valid 10-digit mobile number');
+    if (!addrVerified) return toast.error('Pick your address from the suggestions, or select it on the map');
     if (!addrForm.pincode || addrForm.pincode.length !== 6) return toast.error('Enter a valid 6-digit pincode');
     setSavingAddr(true);
     try {
@@ -185,6 +200,12 @@ export default function Account() {
                           </div>
                           <div className="text-muted-foreground text-xs mt-1">{a.name} · {a.mobile}</div>
                           <div className="text-muted-foreground text-xs">{a.address_line1}{a.address_line2 ? `, ${a.address_line2}` : ''}, {a.city}, {a.state} - {a.pincode}</div>
+                          {a.lat != null && a.lng != null && (
+                            <a href={mapsPlaceUrl(a.lat, a.lng)} target="_blank" rel="noreferrer"
+                              className="text-[11px] text-primary hover:underline inline-flex items-center gap-1 mt-1">
+                              <MapPin className="h-3 w-3" /> Location pinned on map
+                            </a>
+                          )}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button type="button" className="p-1.5 hover:bg-muted rounded" onClick={() => startEditAddress(a)} title="Edit"><Pencil className="h-3.5 w-3.5" /></button>
@@ -204,8 +225,14 @@ export default function Account() {
                     <div><Label className="text-xs text-muted-foreground">Label (e.g. Home, Shop)</Label><Input value={addrForm.label} onChange={(e) => updAddr('label', e.target.value)} /></div>
                     <div><Label className="text-xs text-muted-foreground">Mobile Number</Label><Input required inputMode="numeric" maxLength={10} value={addrForm.mobile} onChange={(e) => updAddr('mobile', e.target.value.replace(/[^0-9]/g, ''))} /></div>
                     <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Recipient Name</Label><Input required value={addrForm.name} onChange={(e) => updAddr('name', e.target.value)} /></div>
-                    <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 1</Label><Input required value={addrForm.address_line1} onChange={(e) => updAddr('address_line1', e.target.value)} /></div>
-                    <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 2</Label><Input value={addrForm.address_line2} onChange={(e) => updAddr('address_line2', e.target.value)} /></div>
+                    <AddressPicker
+                      value={addrForm}
+                      onChange={patchAddr}
+                      verified={addrVerified}
+                      onVerifiedChange={setAddrVerified}
+                      testIdPrefix="account-address"
+                    />
+                    <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 2</Label><Input value={addrForm.address_line2} onChange={(e) => updAddr('address_line2', e.target.value)} placeholder="Flat / Floor / Landmark" /></div>
                     <div><Label className="text-xs text-muted-foreground">City</Label><Input required value={addrForm.city} onChange={(e) => updAddr('city', e.target.value)} /></div>
                     <div><Label className="text-xs text-muted-foreground">State</Label><Input required value={addrForm.state} onChange={(e) => updAddr('state', e.target.value)} /></div>
                     <div><Label className="text-xs text-muted-foreground">Pincode</Label><Input required value={addrForm.pincode} onChange={(e) => updAddr('pincode', e.target.value.replace(/[^0-9]/g, ''))} maxLength={6} /></div>
