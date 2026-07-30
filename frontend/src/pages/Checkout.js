@@ -39,6 +39,9 @@ export default function Checkout() {
   const [pincodeReason, setPincodeReason] = useState(null);
   const [addrSuggestions, setAddrSuggestions] = useState([]);
   const [addrOpen, setAddrOpen] = useState(false);
+  // Address Line 1 must come from a picked Google suggestion (or a previously saved address),
+  // never free text - a typo'd street silently geocodes to the wrong place and misprices delivery.
+  const [addrVerified, setAddrVerified] = useState(false);
   const addrSessionRef = useRef(newPlacesSession());
   // Skips one suggestions-fetch cycle when address_line1 was set programmatically
   // (saved address applied / suggestion picked) rather than typed.
@@ -59,7 +62,9 @@ export default function Checkout() {
   // the "we don't deliver there" rejection) before submitting, not after. Debounced and
   // best-effort - a failed/slow estimate call must never block the checkout page itself.
   useEffect(() => {
-    if (!form.address_line1 || !form.city || !form.pincode || form.pincode.length < 6) {
+    // Wait for a picked suggestion - geocoding half-typed text just burns API calls and can
+    // resolve somewhere unrelated. Line 2 is included so a flat/floor detail refines the pin.
+    if (!addrVerified || !form.address_line1 || !form.city || !form.pincode || form.pincode.length < 6) {
       setDeliveryEstimate(null);
       setCheckingDelivery(false);
       return;
@@ -79,7 +84,7 @@ export default function Checkout() {
       }
     }, 700);
     return () => clearTimeout(t);
-  }, [form.address_line1, form.address_line2, form.city, form.state, form.pincode]);
+  }, [addrVerified, form.address_line1, form.address_line2, form.city, form.state, form.pincode]);
 
   // Verify the pincode actually exists (via India Post lookup on the backend) rather than just
   // checking it's 6 digits - best-effort, fails open if the lookup itself is unavailable.
@@ -128,16 +133,18 @@ export default function Checkout() {
       const { data } = await api.get(`/places/details/${s.place_id}`, { params: { session: addrSessionRef.current } });
       // A Places session ends at the first details call - start a fresh one for the next search.
       addrSessionRef.current = newPlacesSession();
+      // Line 2 is deliberately left alone - it's the customer's flat/floor/landmark detail.
       setForm(f => ({
         ...f,
-        address_line1: data.address_line1 || s.main_text,
-        address_line2: data.address_line2 || f.address_line2,
+        address_line1: data.address_line1 || s.description || s.main_text,
         city: data.city || f.city,
         state: data.state || f.state,
         pincode: /^\d{6}$/.test(data.pincode || '') ? data.pincode : f.pincode,
       }));
+      setAddrVerified(true);
     } catch {
       setForm(f => ({ ...f, address_line1: s.description || s.main_text }));
+      setAddrVerified(true);
     }
   };
 
@@ -182,6 +189,7 @@ export default function Checkout() {
 
   const applyAddress = (a) => {
     addrProgrammaticRef.current = true;
+    setAddrVerified(true);
     setSelectedAddressId(a.id);
     setForm(f => ({
       ...f,
@@ -192,6 +200,7 @@ export default function Checkout() {
 
   const useNewAddress = () => {
     setSelectedAddressId('new');
+    setAddrVerified(false);
     setForm(f => ({ ...f, address_line1: '', address_line2: '', city: 'Lucknow', state: 'Uttar Pradesh', pincode: '', landmark: '', gst_number: '' }));
   };
 
@@ -249,6 +258,7 @@ export default function Checkout() {
     e.preventDefault();
     if (!items.length) return toast.error('Cart is empty');
     if (!/^[6-9]\d{9}$/.test(form.mobile)) return toast.error('Enter a valid 10-digit mobile number');
+    if (!addrVerified) return toast.error('Please pick your address from the suggestions in Address Line 1');
     if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return toast.error('Enter a valid email address');
     if (!cityValid) return toast.error('We only deliver within Lucknow. Please enter "Lucknow" as the city.');
     if (!stateValid) return toast.error('We only deliver within Uttar Pradesh. Please enter "Uttar Pradesh" as the state.');
@@ -395,7 +405,8 @@ export default function Checkout() {
                 <div className="sm:col-span-2 relative">
                   <Label className="text-xs text-muted-foreground">Address Line 1 *</Label>
                   <Input required value={form.address_line1} autoComplete="off"
-                    onChange={(e) => upd('address_line1', e.target.value)}
+                    onChange={(e) => { setAddrVerified(false); upd('address_line1', e.target.value); }}
+                    aria-invalid={!!form.address_line1 && !addrVerified}
                     onFocus={() => addrSuggestions.length > 0 && setAddrOpen(true)}
                     onBlur={() => setTimeout(() => setAddrOpen(false), 150)}
                     data-testid="checkout-address-line1-input" placeholder="House / Shop No., Street — start typing to search" />
@@ -414,6 +425,9 @@ export default function Checkout() {
                       ))}
                     </div>
                   )}
+                  {addrVerified
+                    ? <div className="text-xs text-emerald-600 mt-1">Address confirmed from map</div>
+                    : <div className="text-xs text-muted-foreground mt-1">Start typing and pick your address from the suggestions</div>}
                 </div>
                 <div className="sm:col-span-2"><Label className="text-xs text-muted-foreground">Address Line 2</Label><Input value={form.address_line2} onChange={(e) => upd('address_line2', e.target.value)} placeholder="Area, Locality" /></div>
                 <div>
@@ -543,7 +557,10 @@ export default function Checkout() {
               {deliveryBlocked && (
                 <div className="mt-3 text-xs text-red-600 text-center">{deliveryEstimate.reason}</div>
               )}
-              <Button type="submit" size="lg" className="w-full mt-4" disabled={placing || deliveryBlocked || !cityValid || !stateValid} data-testid="place-order-button">
+              {!addrVerified && (
+                <div className="mt-3 text-xs text-amber-600 text-center">Pick your address from the suggestions to continue</div>
+              )}
+              <Button type="submit" size="lg" className="w-full mt-4" disabled={placing || deliveryBlocked || !cityValid || !stateValid || !addrVerified} data-testid="place-order-button">
                 {placing ? (payment === 'online' ? 'Processing payment...' : 'Placing order...') : (payment === 'online' ? `Pay Now • ${formatINR(total)}` : `Place Order • ${formatINR(total)}`)}
               </Button>
               <div className="text-[10px] text-muted-foreground text-center mt-2">By placing the order, you agree to our terms.</div>

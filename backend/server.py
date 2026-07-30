@@ -1961,6 +1961,12 @@ async def verify_pincode(pincode: str, request: Request):
 LUCKNOW_CENTER_LAT, LUCKNOW_CENTER_LNG = 26.8467, 80.9462
 _PLACES_SESSION_RE = re.compile(r'^[A-Za-z0-9-]{8,64}$')
 _PLACE_ID_RE = re.compile(r'^[A-Za-z0-9_-]{10,300}$')
+# Google shortens street types inconsistently between a place's display name and its address
+# components; folding them to one spelling lets us spot the repeats.
+_STREET_ABBREVIATIONS = {
+    'rd': 'road', 'st': 'street', 'ln': 'lane', 'ave': 'avenue', 'avn': 'avenue',
+    'ngr': 'nagar', 'xing': 'crossing', 'sec': 'sector',
+}
 
 
 @api_router.get('/places/autocomplete')
@@ -1974,10 +1980,11 @@ async def places_autocomplete(q: str, request: Request, session: str = ''):
         'input': q[:120],
         'includedRegionCodes': ['in'],
         'languageCode': 'en',
-        # Bias (not restrict) results towards Lucknow - we only deliver there anyway.
-        'locationBias': {'circle': {
+        # Hard-restrict to our delivery radius - suggesting places we can't deliver to only
+        # leads the customer into a rejected checkout.
+        'locationRestriction': {'circle': {
             'center': {'latitude': LUCKNOW_CENTER_LAT, 'longitude': LUCKNOW_CENTER_LNG},
-            'radius': 30000.0,
+            'radius': MAX_DELIVERY_RADIUS_KM * 1000,
         }},
     }
     if session and _PLACES_SESSION_RE.fullmatch(session):
@@ -1998,10 +2005,16 @@ async def places_autocomplete(q: str, request: Request, session: str = ''):
         logger.warning('Places autocomplete failed (%s): %s', resp.status_code, (data.get('error') or {}).get('message', ''))
         return {'suggestions': []}
     out = []
-    for s in (data.get('suggestions') or [])[:6]:
+    for s in (data.get('suggestions') or []):
         pred = s.get('placePrediction') or {}
         if not pred.get('placeId'):
             continue
+        # The circle restriction is geometric, so it still lets in neighbouring towns that fall
+        # inside the radius - keep only places that actually name Lucknow.
+        if 'lucknow' not in (pred.get('text') or {}).get('text', '').lower():
+            continue
+        if len(out) >= 6:
+            break
         fmt = pred.get('structuredFormat') or {}
         out.append({
             'place_id': pred['placeId'],
@@ -2045,20 +2058,32 @@ async def places_details(place_id: str, request: Request, session: str = ''):
     for c in result.get('addressComponents', []):
         for t in c.get('types', []):
             comp.setdefault(t, c.get('longText', ''))
-    line1 = ', '.join(p for p in [
+    # Everything up to (but excluding) the city goes on line 1 as a single string - splitting the
+    # picked place across two fields confused customers, and line 2 is theirs for flat/floor
+    # details. Google repeats the same text across components ("253, Nadan Mahal Rd" as the
+    # display name, then "253" and "Nadan Mahal Road" again), so drop any part whose words are
+    # already covered by what we've kept.
+    parts: List[str] = []
+    seen_words: set = set()
+    for value in [
+        (result.get('displayName') or {}).get('text', ''),
         comp.get('subpremise'), comp.get('premise'), comp.get('street_number'), comp.get('route'),
-    ] if p)
-    name = (result.get('displayName') or {}).get('text', '')
-    if name and name.lower() not in line1.lower():
-        line1 = f'{name}, {line1}' if line1 else name
-    line2 = ', '.join(p for p in [
         comp.get('sublocality_level_2'),
         comp.get('sublocality_level_1') or comp.get('sublocality'),
         comp.get('neighborhood'),
-    ] if p)
+    ]:
+        value = (value or '').strip()
+        if not value:
+            continue
+        words = {_STREET_ABBREVIATIONS.get(w, w) for w in re.findall(r'[a-z0-9]+', value.lower())}
+        if words and words <= seen_words:
+            continue
+        parts.append(value)
+        seen_words |= words
+    line1 = ', '.join(parts)
     return {
         'address_line1': line1,
-        'address_line2': line2,
+        'address_line2': '',
         'city': comp.get('locality') or comp.get('administrative_area_level_2', ''),
         'state': comp.get('administrative_area_level_1', ''),
         'pincode': comp.get('postal_code', ''),
