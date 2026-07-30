@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api, formatINR, API } from '../../lib/api';
+import { api, formatINR, downloadFile } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Textarea } from '../../components/ui/textarea';
@@ -19,6 +19,7 @@ export default function AdminOrderDetail() {
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [returnNote, setReturnNote] = useState('');
+  const [downloadingInvoice, setDownloadingInvoice] = useState(false);
 
   const load = useCallback(() => api.get(`/orders/${oid}`).then(r => { setOrder(r.data); setNext(r.data.status); }), [oid]);
   useEffect(() => { load(); }, [load]);
@@ -32,6 +33,20 @@ export default function AdminOrderDetail() {
       await load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Update failed'); }
     finally { setSaving(false); }
+  };
+
+  // Goes through the api client rather than a plain link so the admin bearer token is sent.
+  // Without it the backend can't tell this is staff, applies the customer rule, and refuses the
+  // invoice until the order is delivered - which is exactly when admins need it least.
+  const downloadInvoice = async () => {
+    setDownloadingInvoice(true);
+    try {
+      await downloadFile(`/orders/${oid}/invoice`, {}, `invoice-${oid}.pdf`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to download invoice');
+    } finally {
+      setDownloadingInvoice(false);
+    }
   };
 
   const markRefunded = async () => {
@@ -65,7 +80,9 @@ export default function AdminOrderDetail() {
         </div>
         <div className="flex items-center gap-2">
           <Badge className={statusColor[order.status] || ''} variant="outline">{order.status.toUpperCase()}</Badge>
-          <a href={`${API}/orders/${order.id}/invoice?mobile=${order.address?.mobile || ''}`} target="_blank" rel="noreferrer"><Button variant="outline" className="gap-2" data-testid="admin-invoice-download"><FileText className="h-4 w-4" />Invoice PDF</Button></a>
+          <Button variant="outline" className="gap-2" onClick={downloadInvoice} disabled={downloadingInvoice} data-testid="admin-invoice-download">
+            <FileText className="h-4 w-4" />{downloadingInvoice ? 'Preparing…' : 'Invoice PDF'}
+          </Button>
           <a href={`https://wa.me/${order.address?.mobile}`} target="_blank" rel="noreferrer"><Button variant="outline" className="gap-2"><MessageCircle className="h-4 w-4" />Customer</Button></a>
         </div>
       </div>
