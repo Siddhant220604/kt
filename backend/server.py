@@ -1934,6 +1934,108 @@ async def verify_pincode(pincode: str, request: Request):
     return {'valid': True, 'checked': True, 'city': info.get('city', ''), 'state': info.get('state', '')}
 
 
+# ------------------ ADDRESS AUTOCOMPLETE (Google Places) ------------------
+
+LUCKNOW_CENTER_LAT, LUCKNOW_CENTER_LNG = 26.8467, 80.9462
+_PLACES_SESSION_RE = re.compile(r'^[A-Za-z0-9-]{8,64}$')
+_PLACE_ID_RE = re.compile(r'^[A-Za-z0-9_-]{10,300}$')
+
+
+@api_router.get('/places/autocomplete')
+async def places_autocomplete(q: str, request: Request, session: str = ''):
+    # Public tier limit - hit live while the customer types the delivery address.
+    dependencies.check_rate_limit(request, 'places_autocomplete', *rate_limits.get_bucket_limit('places_autocomplete', 60, 60))
+    q = (q or '').strip()
+    if len(q) < 3 or not GOOGLE_MAPS_API_KEY:
+        return {'suggestions': []}
+    params = {
+        'input': q[:120],
+        'key': GOOGLE_MAPS_API_KEY,
+        'components': 'country:in',
+        # Bias (not restrict) results towards Lucknow - we only deliver there anyway.
+        'location': f'{LUCKNOW_CENTER_LAT},{LUCKNOW_CENTER_LNG}',
+        'radius': 30000,
+        'language': 'en',
+    }
+    if session and _PLACES_SESSION_RE.fullmatch(session):
+        params['sessiontoken'] = session
+    try:
+        resp = await asyncio.to_thread(
+            requests.get,
+            'https://maps.googleapis.com/maps/api/place/autocomplete/json',
+            params=params, timeout=GOOGLE_MAPS_TIMEOUT,
+        )
+        data = resp.json()
+    except Exception:
+        logger.warning('Places autocomplete request failed for input: %s', q, exc_info=True)
+        return {'suggestions': []}
+    if data.get('status') not in ('OK', 'ZERO_RESULTS'):
+        logger.warning('Places autocomplete returned status %s: %s', data.get('status'), data.get('error_message', ''))
+        return {'suggestions': []}
+    return {'suggestions': [
+        {
+            'place_id': p.get('place_id', ''),
+            'main_text': (p.get('structured_formatting') or {}).get('main_text', ''),
+            'secondary_text': (p.get('structured_formatting') or {}).get('secondary_text', ''),
+            'description': p.get('description', ''),
+        }
+        for p in (data.get('predictions') or [])[:6] if p.get('place_id')
+    ]}
+
+
+@api_router.get('/places/details/{place_id}')
+async def places_details(place_id: str, request: Request, session: str = ''):
+    dependencies.check_rate_limit(request, 'places_details', *rate_limits.get_bucket_limit('places_details', 30, 60))
+    if not _PLACE_ID_RE.fullmatch(place_id):
+        raise HTTPException(status_code=400, detail='Invalid place id')
+    if not GOOGLE_MAPS_API_KEY:
+        raise HTTPException(status_code=503, detail='Address lookup is not configured')
+    params = {
+        'place_id': place_id,
+        'key': GOOGLE_MAPS_API_KEY,
+        'fields': 'address_component,formatted_address,name',
+        'language': 'en',
+    }
+    if session and _PLACES_SESSION_RE.fullmatch(session):
+        params['sessiontoken'] = session
+    try:
+        resp = await asyncio.to_thread(
+            requests.get,
+            'https://maps.googleapis.com/maps/api/place/details/json',
+            params=params, timeout=GOOGLE_MAPS_TIMEOUT,
+        )
+        data = resp.json()
+    except Exception:
+        logger.warning('Places details request failed for %s', place_id, exc_info=True)
+        raise HTTPException(status_code=502, detail='Address lookup failed')
+    if data.get('status') != 'OK' or not data.get('result'):
+        raise HTTPException(status_code=502, detail='Address lookup failed')
+    result = data['result']
+    comp: Dict[str, str] = {}
+    for c in result.get('address_components', []):
+        for t in c.get('types', []):
+            comp.setdefault(t, c.get('long_name', ''))
+    line1 = ', '.join(p for p in [
+        comp.get('subpremise'), comp.get('premise'), comp.get('street_number'), comp.get('route'),
+    ] if p)
+    name = result.get('name', '')
+    if name and name.lower() not in line1.lower():
+        line1 = f'{name}, {line1}' if line1 else name
+    line2 = ', '.join(p for p in [
+        comp.get('sublocality_level_2'),
+        comp.get('sublocality_level_1') or comp.get('sublocality'),
+        comp.get('neighborhood'),
+    ] if p)
+    return {
+        'address_line1': line1,
+        'address_line2': line2,
+        'city': comp.get('locality') or comp.get('administrative_area_level_2', ''),
+        'state': comp.get('administrative_area_level_1', ''),
+        'pincode': comp.get('postal_code', ''),
+        'formatted_address': result.get('formatted_address', ''),
+    }
+
+
 @api_router.post('/delivery/estimate')
 async def estimate_delivery(req: DeliveryEstimateIn, request: Request):
     # Public tier limit - this is an unauthenticated endpoint hit live while the customer types.

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Heart, ShoppingCart, Star } from 'lucide-react';
+import { Heart, ShoppingCart, Star, Minus, Plus } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { formatINR } from '../lib/api';
@@ -13,7 +13,8 @@ import FramedImage from './FramedImage';
 const FALLBACK = 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=800&q=80';
 
 const ProductCard = ({ product }) => {
-  const { addItem } = useCart();
+  const { addItem, updateQty, removeItem, items } = useCart();
+  const cartItem = items.find(i => i.product_id === product.id);
   const { toggle, has } = useWishlist();
   const img = (product.images && product.images[0]) || FALLBACK;
   const inStock = (product.stock || 0) > 0;
@@ -49,10 +50,28 @@ const ProductCard = ({ product }) => {
             {discount > 0 && <div className="text-xs text-muted-foreground line-through">{formatINR(product.compare_price)}</div>}
             <div className="text-[10px] text-muted-foreground uppercase mt-0.5">per {product.unit || 'pc'}{product.size ? ` • ${product.size}` : ''}</div>
           </div>
-          <Button size="sm" data-testid="product-card-add-to-cart" disabled={!inStock}
-            onClick={() => { addItem(product, product.moq || 1); toast.success('Added to cart'); }}>
-            <ShoppingCart className="h-3.5 w-3.5 mr-1" />Add
-          </Button>
+          {cartItem ? (
+            <div className="flex items-center border border-border rounded-lg" data-testid="product-card-qty-stepper">
+              <button
+                onClick={() => {
+                  if (cartItem.quantity - 1 < (cartItem.moq || 1)) { removeItem(product.id); toast('Removed from cart'); }
+                  else updateQty(product.id, cartItem.quantity - 1);
+                }}
+                data-testid="product-card-qty-minus"
+                className="px-2.5 py-1.5 hover:bg-muted rounded-l-lg"><Minus className="h-3.5 w-3.5" /></button>
+              <span className="px-2 text-sm font-medium min-w-[28px] text-center" data-testid="product-card-qty">{cartItem.quantity}</span>
+              <button
+                onClick={() => updateQty(product.id, cartItem.quantity + 1)}
+                disabled={cartItem.stock > 0 && cartItem.quantity >= cartItem.stock}
+                data-testid="product-card-qty-plus"
+                className="px-2.5 py-1.5 hover:bg-muted rounded-r-lg disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="h-3.5 w-3.5" /></button>
+            </div>
+          ) : (
+            <Button size="sm" data-testid="product-card-add-to-cart" disabled={!inStock}
+              onClick={() => { addItem(product, product.moq || 1); toast.success('Added to cart'); }}>
+              <ShoppingCart className="h-3.5 w-3.5 mr-1" />Add
+            </Button>
+          )}
         </div>
       </div>
     </motion.div>
