@@ -30,6 +30,21 @@ const QUALITY_STEPS = [0.9, 0.82, 0.74, 0.66, 0.55];
 
 export const MAX_INPUT_BYTES = 12 * 1024 * 1024;
 
+// Accepts what an image slot can actually hold: a picked File, a stored base64 data URI, or a
+// remote http(s) URL. Remote hosts that don't send CORS headers throw here rather than silently
+// tainting a canvas we'd fail to read back later.
+const toBlob = async (source) => {
+  if (source instanceof Blob) return source;
+  let response;
+  try {
+    response = await fetch(source, { mode: 'cors' });
+  } catch (err) {
+    throw new Error('Could not fetch that image (the host blocked the request)');
+  }
+  if (!response.ok) throw new Error(`Could not fetch that image (HTTP ${response.status})`);
+  return response.blob();
+};
+
 const readAsDataUrl = (blob) => new Promise((res, rej) => {
   const r = new FileReader();
   r.onload = () => res(r.result);
@@ -53,8 +68,16 @@ const toBitmap = async (blob) => {
   }
 };
 
-// Tightest box containing pixels the model kept. Returns null when the cutout came back empty,
-// which is the signal that the model found no subject and we should keep the original photo.
+// A cutout is only worth keeping if the model committed to it. Measured against real catalog
+// photos, a clean cut leaves under 1% of the frame semi-transparent and holds a solid subject;
+// a lifestyle shot with no separable subject (product filling the frame, background the same
+// tone) came back 32% semi-transparent with 3% solid - fragments, not a subject. Rejecting on
+// those two numbers is what stops the backfill from shredding an image it cannot improve.
+const MAX_PARTIAL_SHARE = 0.10;   // fraction of the frame left semi-transparent
+const MIN_OPAQUE_SHARE = 0.05;    // fraction the model kept solidly
+
+// Tightest box containing pixels the model kept, plus how confident that matte looks. Returns
+// null when the cutout is empty or untrustworthy - the signal to keep the original photo.
 const subjectBounds = (bitmap) => {
   const w = bitmap.width, h = bitmap.height;
   const probe = document.createElement('canvas');
@@ -63,10 +86,13 @@ const subjectBounds = (bitmap) => {
   ctx.drawImage(bitmap, 0, 0);
   const { data } = ctx.getImageData(0, 0, w, h);
 
-  let top = h, left = w, right = -1, bottom = -1;
+  let top = h, left = w, right = -1, bottom = -1, opaque = 0, partial = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (data[(y * w + x) * 4 + 3] < ALPHA_THRESHOLD) continue;
+      const alpha = data[(y * w + x) * 4 + 3];
+      if (alpha > 225) opaque++;
+      else if (alpha >= 30) partial++;
+      if (alpha < ALPHA_THRESHOLD) continue;
       if (x < left) left = x;
       if (x > right) right = x;
       if (y < top) top = y;
@@ -74,6 +100,9 @@ const subjectBounds = (bitmap) => {
     }
   }
   if (right < left || bottom < top) return null;
+
+  const frame = w * h;
+  if (partial / frame > MAX_PARTIAL_SHARE || opaque / frame < MIN_OPAQUE_SHARE) return null;
   return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
 };
 
@@ -139,14 +168,18 @@ const capOriginal = async (file) => {
 const PROGRESS_LABELS = { fetch: 'Loading background remover', compute: 'Removing background' };
 
 /**
- * Cuts the background out of `file` and centres the subject on a white square.
+ * Cuts the background out of an image and centres the subject on a white square.
  *
- * Resolves to `{ dataUrl, original, removed }` where `original` is the untouched upload (so the
- * caller can offer an undo) and `removed` is false when the model found no subject - in that
- * case `dataUrl` is still squared and padded onto white, just from the original photo.
- * Rejects only if the file itself could not be read or encoded.
+ * `source` is a File/Blob (a fresh upload), a base64 data URI, or a remote http(s) URL - the
+ * three things a product image slot can hold.
+ *
+ * Resolves to `{ dataUrl, original, removed }` where `original` is the image as it came in (so
+ * the caller can offer an undo) and `removed` is false when the model found no subject - in
+ * that case `dataUrl` is still squared and padded onto white, just from the original.
+ * Rejects if the source could not be fetched, decoded, or encoded.
  */
-export async function processProductImage(file, { onProgress } = {}) {
+export async function processImageSource(source, { onProgress } = {}) {
+  const file = await toBlob(source);
   const original = await capOriginal(file);
   const report = (stage, pct) => onProgress?.({ stage, pct });
 
@@ -177,8 +210,11 @@ export async function processProductImage(file, { onProgress } = {}) {
 
   // A cutout that came back empty means the model kept nothing - square up the original photo
   // instead, since a blank white tile is worse than an untrimmed one.
-  const source = removed ? cutBitmap : await toBitmap(file);
-  const region = removed ? crop : { x: 0, y: 0, w: source.width, h: source.height };
-  const dataUrl = await encodeUnderCap(composeOnWhite(source, region, CANVAS_SIZE));
+  const bitmap = removed ? cutBitmap : await toBitmap(file);
+  const region = removed ? crop : { x: 0, y: 0, w: bitmap.width, h: bitmap.height };
+  const dataUrl = await encodeUnderCap(composeOnWhite(bitmap, region, CANVAS_SIZE));
   return { dataUrl, original, removed };
 }
+
+// The upload path is just the Blob case, named for how the admin dialog uses it.
+export const processProductImage = processImageSource;

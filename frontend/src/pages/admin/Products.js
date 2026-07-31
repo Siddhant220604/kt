@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, FileSpreadsheet, Loader2, Undo2, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { processProductImage, MAX_INPUT_BYTES } from '../../lib/productImage';
+import ImageCleanupDialog from '../../components/admin/ImageCleanupDialog';
 
 const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specsList: [], featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '', variant_group: '', variant_label: '' };
 
@@ -31,6 +32,7 @@ export default function AdminProducts() {
   // the admin can undo a cutout the model got wrong. Both are reindexed alongside `edit.images`.
   const [imgBusy, setImgBusy] = useState({});
   const [imgOriginals, setImgOriginals] = useState({});
+  const [cleanupOpen, setCleanupOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -198,6 +200,7 @@ export default function AdminProducts() {
               <SelectItem value="inactive">Draft</SelectItem>
             </SelectContent>
           </Select>
+          <Button variant="outline" onClick={() => setCleanupOpen(true)} className="gap-1" title="Remove backgrounds from images uploaded before this feature existed" data-testid="admin-cleanup-images"><Wand2 className="h-4 w-4" />Clean up images</Button>
           <Button variant="outline" onClick={downloadTemplate} className="gap-1" title="Download a blank CSV to fill in"><FileSpreadsheet className="h-4 w-4" />Template</Button>
           <Button variant="outline" onClick={exportCsv} className="gap-1" data-testid="admin-export-products"><Download className="h-4 w-4" />Export CSV</Button>
           <label className="cursor-pointer">
@@ -355,6 +358,8 @@ export default function AdminProducts() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ImageCleanupDialog open={cleanupOpen} onOpenChange={setCleanupOpen} onDone={load} />
     </div>
   );
 }
