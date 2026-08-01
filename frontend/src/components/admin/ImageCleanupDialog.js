@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../../lib/api';
-import { processImageSource } from '../../lib/productImage';
+import { processImageSource, looksAlreadyProcessed } from '../../lib/productImage';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Loader2, Download, AlertTriangle, CheckCircle2 } from 'lucide-react';
@@ -47,7 +47,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [progress, setProgress] = useState({ index: 0, total: 0, label: '', stage: '' });
-  const [results, setResults] = useState({ cleaned: 0, untouched: 0, failed: [] });
+  const [results, setResults] = useState({ cleaned: 0, untouched: 0, skipped: 0, failed: [], blocked: null });
   const stopRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -63,7 +63,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
     if (!open) return;
     stopRef.current = false;
     setProducts(null); setBackedUp(false); setRunning(false); setDone(false);
-    setResults({ cleaned: 0, untouched: 0, failed: [], blocked: null });
+    setResults({ cleaned: 0, untouched: 0, skipped: 0, failed: [], blocked: null });
     load();
   }, [open, load]);
 
@@ -88,7 +88,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
   const run = async () => {
     setRunning(true);
     stopRef.current = false;
-    let cleaned = 0, untouched = 0;
+    let cleaned = 0, untouched = 0, skipped = 0;
     const failed = [];
     let seen = 0;
     let blocked = null;
@@ -104,6 +104,10 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
         if (!src) continue;
         seen++;
         setProgress({ index: seen, total: slotCount, label: product.name, stage: 'Starting' });
+        // A run that was stopped part-way, or that hit the model failing, leaves the rest of the
+        // catalog untouched - so picking up again has to mean carrying on, not redoing the images
+        // that already came out fine at ~10 seconds each.
+        if (await looksAlreadyProcessed(src)) { skipped++; continue; }
         try {
           const { dataUrl, removed, reason, detail } = await processImageSource(src, {
             onProgress: ({ stage, pct }) => setProgress(pr => ({ ...pr, stage: pct ? `${stage} ${pct}%` : stage })),
@@ -131,7 +135,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
       }
     }
 
-    setResults({ cleaned, untouched, failed, blocked });
+    setResults({ cleaned, untouched, skipped, failed, blocked });
     setRunning(false);
     setDone(true);
     onDone?.();
@@ -153,7 +157,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
               <div className="flex items-start gap-2"><AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-[hsl(var(--brand-marigold))]" /><span>This replaces the images on your live store. Download the backup first - it is the only way back.</span></div>
               <Button variant="outline" size="sm" onClick={downloadBackup} className="gap-1" data-testid="cleanup-backup"><Download className="h-3 w-3" />{backedUp ? 'Download backup again' : 'Download backup'}</Button>
             </div>
-            <p className="text-muted-foreground text-xs">Roughly {Math.ceil(slotCount * 7 / 60)}-{Math.ceil(slotCount * 12 / 60)} minutes. Keep this tab open and in the foreground; you can stop part-way and whatever finished stays saved.</p>
+            <p className="text-muted-foreground text-xs">Roughly {Math.ceil(slotCount * 7 / 60)}-{Math.ceil(slotCount * 12 / 60)} minutes, less if some are already done - images cleaned up on an earlier run are recognised and skipped. Keep this tab open and in the foreground; you can stop part-way and whatever finished stays saved.</p>
           </div>
         )}
 
@@ -167,7 +171,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
 
         {done && (
           <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-green-600" /><span><strong>{results.cleaned}</strong> cleaned up{results.untouched ? `, ${results.untouched} left alone (no clear subject to cut out)` : ''}.</span></div>
+            <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-green-600" /><span><strong>{results.cleaned}</strong> cleaned up{results.skipped ? `, ${results.skipped} already done` : ''}{results.untouched ? `, ${results.untouched} left alone (no clear subject to cut out)` : ''}.</span></div>
             {results.blocked && (
               <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-1">
                 <div className="font-medium">Stopped - the background remover could not start.</div>

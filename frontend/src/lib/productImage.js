@@ -124,6 +124,47 @@ const composeOnWhite = (bitmap, crop, size) => {
   return canvas;
 };
 
+// Whether an image already looks like this pipeline's output, so a repeat backfill can skip it
+// instead of starting from the top every time. There is nowhere to record "already processed" -
+// an image is a bare string in product.images and the backend's ProductIn forbids extra fields -
+// so the output has to be recognised by its shape: a stored data URI, exactly square, with a
+// white margin all the way round. composeOnWhite guarantees that margin (PADDING_RATIO per side
+// of a white square), and a remote URL is never something this pipeline wrote.
+//
+// A square photo that was already shot on white gets skipped too. That is the right answer for
+// the wrong reason: there is nothing left for the cutout to improve.
+const PROCESSED_SAMPLE = 64;      // downscale before probing; the margin survives the averaging
+const WHITE_MIN = 244;            // JPEG ringing round the subject never reaches the border
+const RING_TOLERANCE = 0.02;      // fraction of ring pixels allowed to be off-white
+
+export async function looksAlreadyProcessed(source) {
+  if (typeof source !== 'string' || !source.startsWith('data:image/')) return false;
+  try {
+    const bitmap = await toBitmap(await toBlob(source));
+    if (bitmap.width !== bitmap.height) return false;
+
+    const n = PROCESSED_SAMPLE;
+    const canvas = document.createElement('canvas');
+    canvas.width = n; canvas.height = n;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0, n, n);
+    const { data } = ctx.getImageData(0, 0, n, n);
+
+    let ring = 0, offWhite = 0;
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        if (x > 1 && x < n - 2 && y > 1 && y < n - 2) continue;   // interior: not the margin
+        const p = (y * n + x) * 4;
+        ring++;
+        if (data[p] < WHITE_MIN || data[p + 1] < WHITE_MIN || data[p + 2] < WHITE_MIN) offWhite++;
+      }
+    }
+    return ring > 0 && offWhite / ring <= RING_TOLERANCE;
+  } catch (err) {
+    return false;   // unreadable here means processImageSource will report it properly
+  }
+}
+
 const canvasToDataUrl = (canvas, quality) => new Promise((res, rej) => {
   canvas.toBlob((blob) => (blob ? res(readAsDataUrl(blob)) : rej(new Error('Could not encode the image'))), 'image/jpeg', quality);
 });
