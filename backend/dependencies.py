@@ -21,9 +21,40 @@ bearer_scheme = HTTPBearer(auto_error=False)
 # ------------------------------------------------------------------------------------------
 _rate_limit_buckets: Dict[str, list[datetime]] = defaultdict(list)
 
+# Keys are per-IP and per-account, so the number of them is bounded only by how many distinct
+# callers turn up - which, for anything internet-facing, means unbounded. Every key whose window
+# has emptied is dead weight, but nothing reads a key again once its owner has gone away, so
+# nothing would ever have removed it: the limiter protecting the app was itself a slow memory
+# leak that a caller could drive by rotating IPs. Sweeping on a fixed interval keeps the cost
+# proportional to traffic rather than to a per-request scan of every key.
+_LAST_SWEEP = datetime.now(timezone.utc)
+_SWEEP_INTERVAL_SECONDS = 300
+
+# Each key's own window, so the sweep can tell a genuinely expired key from one that merely
+# belongs to a slower bucket. Judging every key by the window of whichever endpoint happened to
+# trigger the sweep would drop a 15-minute key after 60 seconds and hand its owner a fresh
+# allowance - a rate limiter that forgets early is worse than one that leaks memory.
+_bucket_windows: Dict[str, int] = {}
+
+
+def _sweep_expired(now: datetime) -> None:
+    global _LAST_SWEEP
+    if (now - _LAST_SWEEP).total_seconds() < _SWEEP_INTERVAL_SECONDS:
+        return
+    _LAST_SWEEP = now
+    for key in [k for k, ts in _rate_limit_buckets.items()
+                if not ts or (now - ts[-1]).total_seconds() > _bucket_windows.get(k, 0)]:
+        _rate_limit_buckets.pop(key, None)
+        _bucket_windows.pop(key, None)
+    for key in [k for k, st in _auth_attempts.items()
+                if (now - st.last_attempt).total_seconds() > rate_limits.AUTH_BACKOFF_RESET_SECONDS]:
+        _auth_attempts.pop(key, None)
+
 
 def _check_sliding_window(key: str, max_requests: int, window_seconds: int) -> None:
     now = datetime.now(timezone.utc)
+    _bucket_windows[key] = window_seconds
+    _sweep_expired(now)
     attempts = [ts for ts in _rate_limit_buckets[key] if (now - ts).total_seconds() <= window_seconds]
     if len(attempts) >= max_requests:
         _rate_limit_buckets[key] = attempts

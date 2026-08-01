@@ -8,7 +8,7 @@ from pymongo import ReturnDocument, MongoClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, field_validator, ConfigDict
+from pydantic import BaseModel, Field, EmailStr, field_validator, ConfigDict, ValidationError
 from typing import List, Optional, Any, Dict, Literal
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -521,15 +521,20 @@ class PaymentFailedRequest(BaseModel):
     # own logs/analytics - never shown to the customer and never used to build the WhatsApp send.
     reason: Optional[str] = Field('', max_length=200)
 
+# The one list of order statuses the API will accept anywhere, request bodies and query strings
+# alike. ORDER_STATUSES below is the same set as a plain list, for the places that need to
+# iterate it rather than type-check against it.
+OrderStatus = Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
+
 class OrderStatusUpdate(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    status: Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
+    status: OrderStatus
     tracking_note: Optional[str] = Field('', max_length=1000)
 
 class BulkStatusUpdate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     order_ids: List[str] = Field(min_length=1, max_length=200)
-    status: Literal['pending', 'confirmed', 'processing', 'packed', 'out for delivery', 'delivered', 'cancelled']
+    status: OrderStatus
     tracking_note: Optional[str] = Field('', max_length=1000)
 
 class BulkOrderIds(BaseModel):
@@ -1046,6 +1051,11 @@ async def delete_category(cat_id: str, request: Request, payload: Dict = Depends
 # ------------------ PRODUCTS ------------------
 
 SEARCH_MAX_LEN = 100
+# Ceiling on any page-size a caller can ask for. Without one, `limit` was whatever the query
+# string said: limit=100000 pulled the entire catalog into memory and serialised it, and a
+# negative value reached Motor's to_list(), which rejects it - a 500 from a query string. The
+# admin grid asks for 200, so that is the ceiling rather than a number picked for its roundness.
+MAX_PAGE_SIZE = 200
 
 def contains_term(term: str) -> Dict:
     """Case-insensitive 'contains this text' match for a user-typed search box.
@@ -1061,17 +1071,17 @@ def contains_term(term: str) -> Dict:
 
 @api_router.get('/products')
 async def list_products(
-    category: Optional[str] = None,
-    search: Optional[str] = None,
+    category: Optional[str] = Query(None, max_length=64),
+    search: Optional[str] = Query(None, max_length=SEARCH_MAX_LEN),
     search_in: Optional[Literal['name', 'any']] = 'any',
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
+    min_price: Optional[float] = Query(None, ge=0, le=10_000_000),
+    max_price: Optional[float] = Query(None, ge=0, le=10_000_000),
     featured: Optional[bool] = None,
     in_stock: Optional[bool] = None,
-    sort: Optional[str] = 'newest',
+    sort: Optional[Literal['newest', 'price_asc', 'price_desc', 'name', 'rating']] = 'newest',
     admin_payload: Optional[Dict] = Depends(dependencies.optional_admin),
-    page: int = 1,
-    limit: int = 24,
+    page: int = Query(1, ge=1),
+    limit: int = Query(24, ge=1, le=MAX_PAGE_SIZE),
 ):
     q: Dict = {} if admin_payload else {'active': True}
     if category:
@@ -1290,8 +1300,15 @@ async def import_products(request: Request, payload: Dict = Depends(require_admi
                 featured=str(row.get('featured', '')).strip().lower() in ('true', '1', 'yes'),
                 active=str(row.get('active', 'true')).strip().lower() in ('true', '1', 'yes', ''),
             )
-        except Exception as e:
-            errors.append({'row': i, 'message': str(e)})
+        except (ValidationError, ValueError, TypeError) as e:
+            # Validation text is what makes a rejected row fixable, so it is reported. Anything
+            # else - a driver fault, a bug in here - is logged and reported generically, because
+            # str() on an arbitrary exception is how internals end up on someone's screen.
+            errors.append({'row': i, 'message': str(e)[:500]})
+            continue
+        except Exception:
+            logger.exception('Unexpected error importing CSV row %s', i)
+            errors.append({'row': i, 'message': 'Could not import this row'})
             continue
 
         existing_id = (row.get('id') or '').strip()
@@ -2715,10 +2732,10 @@ async def remove_from_wishlist(product_id: str, request: Request, payload: Dict 
 
 @api_router.get('/orders')
 async def list_orders(
-    status_f: Optional[str] = Query(None, alias='status'),
-    search: Optional[str] = None,
-    page: int = 1,
-    limit: int = 30,
+    status_f: Optional[OrderStatus] = Query(None, alias='status'),
+    search: Optional[str] = Query(None, max_length=SEARCH_MAX_LEN),
+    page: int = Query(1, ge=1),
+    limit: int = Query(30, ge=1, le=MAX_PAGE_SIZE),
     _: Dict = Depends(require_staff),
 ):
     q: Dict = {}
@@ -2737,8 +2754,8 @@ async def list_orders(
 
 @api_router.get('/orders/export')
 async def export_orders(
-    status_f: Optional[str] = Query(None, alias='status'),
-    search: Optional[str] = None,
+    status_f: Optional[OrderStatus] = Query(None, alias='status'),
+    search: Optional[str] = Query(None, max_length=SEARCH_MAX_LEN),
     _: Dict = Depends(require_admin),
 ):
     q: Dict = {}
@@ -2958,7 +2975,7 @@ async def resolve_return(oid: str, req: ReturnResolveIn, request: Request, paylo
     return await db.orders.find_one({'id': oid}, {'_id': 0})
 
 @api_router.get('/orders/{oid}/invoice')
-async def order_invoice(oid: str, mobile: Optional[str] = None, payload: Optional[Dict] = Depends(dependencies.optional_admin)):
+async def order_invoice(oid: str, mobile: Optional[str] = Query(None, max_length=20), payload: Optional[Dict] = Depends(dependencies.optional_admin)):
     o = await db.orders.find_one({'id': oid}, {'_id': 0})
     if not o:
         raise HTTPException(status_code=404, detail='Order not found')
@@ -3980,8 +3997,8 @@ async def admin_analytics(days: int = Query(30, ge=1, le=180), _: Dict = Depends
 async def list_audit_logs(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
-    action: Optional[str] = None,
-    admin_email: Optional[str] = None,
+    action: Optional[str] = Query(None, max_length=64),
+    admin_email: Optional[str] = Query(None, max_length=254),
     _: Dict = Depends(require_admin),
 ):
     q: Dict[str, Any] = {}
