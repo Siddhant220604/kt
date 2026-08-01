@@ -63,7 +63,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
     if (!open) return;
     stopRef.current = false;
     setProducts(null); setBackedUp(false); setRunning(false); setDone(false);
-    setResults({ cleaned: 0, untouched: 0, failed: [] });
+    setResults({ cleaned: 0, untouched: 0, failed: [], blocked: null });
     load();
   }, [open, load]);
 
@@ -91,6 +91,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
     let cleaned = 0, untouched = 0;
     const failed = [];
     let seen = 0;
+    let blocked = null;
 
     for (const product of products) {
       if (stopRef.current) break;
@@ -111,9 +112,11 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
           // Anything else stays exactly as it is - a live catalog image is not worth replacing
           // with a worse one just to make the run look complete.
           if (removed) { slots[i] = dataUrl; changed = true; cleaned++; }
-          // The remover being broken is a failure of the run, not a photo the model declined:
-          // counting it as "left alone" would report a clean sweep over images it never saw.
-          else if (reason === 'model-failed') failed.push({ name: product.name, reason: `background remover unavailable - ${detail}` });
+          // The remover being broken is a failure of the run, not a photo the model declined, and
+          // it does not get better on the next image - onnxruntime cannot re-init after a failed
+          // start, so the remaining images would only collect the same error 52 more times. Stop
+          // and say so; whatever already saved stays saved.
+          else if (reason === 'model-failed') { blocked = detail; stopRef.current = true; }
           else untouched++;
         } catch (e) {
           failed.push({ name: product.name, reason: e?.message || 'Processing failed' });
@@ -128,7 +131,7 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
       }
     }
 
-    setResults({ cleaned, untouched, failed });
+    setResults({ cleaned, untouched, failed, blocked });
     setRunning(false);
     setDone(true);
     onDone?.();
@@ -165,6 +168,13 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
         {done && (
           <div className="space-y-3 text-sm">
             <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-green-600" /><span><strong>{results.cleaned}</strong> cleaned up{results.untouched ? `, ${results.untouched} left alone (no clear subject to cut out)` : ''}.</span></div>
+            {results.blocked && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-1">
+                <div className="font-medium">Stopped - the background remover could not start.</div>
+                <p className="text-xs text-muted-foreground break-words">{results.blocked}</p>
+                <p className="text-xs">Reload this page and run the cleanup again; it will skip over what already finished.</p>
+              </div>
+            )}
             {results.failed.length > 0 && (
               <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                 <div className="font-medium mb-1">{results.failed.length} could not be processed:</div>

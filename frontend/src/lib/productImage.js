@@ -168,39 +168,57 @@ const capOriginal = async (file) => {
 
 const PROGRESS_LABELS = { fetch: 'Loading background remover', compute: 'Removing background' };
 
-// The WebGPU path (device 'gpu' + the worker proxy, which the library only enables together) is
-// the fast one, but it is also the one that breaks: it depends on the driver, the jsep wasm build
-// and SharedArrayBuffer, and when any of those is unhappy onnxruntime throws rather than falling
-// back. Plain wasm on the main thread has none of those dependencies. Trying it second means a
-// machine that cannot run WebGPU still gets its cutout - slowly - instead of silently getting
-// none at all, which reads to the admin as "the model found no subject" on every single image.
-const ATTEMPTS = [
-  { device: 'gpu', proxyToWorker: true },
-  { device: 'cpu', proxyToWorker: false },
-];
+// Deliberately NOT the WebGPU path. device 'gpu' makes the library proxy inference to a worker,
+// and onnxruntime's worker init is not restartable: the proxy branch of
+// initializeWebAssemblyAndOrtRuntime leaves its `initializing` flag set when it throws, where the
+// main-thread branch clears it in a `finally`. So one failure there - a driver, the jsep wasm
+// build, anything - poisons ort for the rest of the page, and every later image comes back
+// "multiple calls to 'initWasm()' detected" no matter how it is retried. Plain wasm on the main
+// thread is slower per image and cannot fail that way. Correctness over speed for a tool two
+// people run occasionally.
+const DEVICE = 'cpu';
+
+// Once ort's wasm init has failed, nothing in this page can bring it back - retrying only
+// produces the confusing follow-on error. Remember it and say the useful thing instead.
+let wasmPoisoned = null;
+
+// onnxruntime appends "Please check if the publicPath is set correctly" to every session failure,
+// which is actively misleading here: `initWasm` complaining about multiple calls means its init
+// flag is still set from an earlier attempt in this same tab (its worker path never clears the
+// flag on failure), and no amount of configuration fixes that from inside the page. A reload
+// does. Say that instead of letting the admin go hunting for a path problem.
+const describeModelError = (message) => (
+  /multiple calls to 'initWasm/i.test(message)
+    ? 'The background remover was left half-started by an earlier attempt in this tab. '
+      + 'Reload the page (Ctrl+Shift+R) and try again - if this is the first thing you did after '
+      + 'reloading, the dev server may still be serving the old bundle.'
+    : message
+);
 
 const runMatting = async (file, report) => {
-  let lastError = null;
-  for (const [index, attempt] of ATTEMPTS.entries()) {
-    try {
-      return await removeBackground(file, {
-        ...attempt,
-        model: MODEL,
-        publicPath: ASSET_PATH,
-        output: { format: 'image/png' },   // PNG keeps the alpha channel we need to trim against
-        progress: (key, current, total) => {
-          const label = PROGRESS_LABELS[String(key).split(':')[0]] || 'Processing';
-          report(label, total ? Math.round((current / total) * 100) : 0);
-        },
-      });
-    } catch (err) {
-      lastError = err;
-      const next = ATTEMPTS[index + 1];
-      if (!next) break;
-      console.warn(`[productImage] ${attempt.device} matting failed, retrying on ${next.device}`, err);
+  if (wasmPoisoned) throw new Error(wasmPoisoned);
+  try {
+    return await removeBackground(file, {
+      device: DEVICE,
+      proxyToWorker: false,
+      model: MODEL,
+      publicPath: ASSET_PATH,
+      output: { format: 'image/png' },   // PNG keeps the alpha channel we need to trim against
+      progress: (key, current, total) => {
+        const label = PROGRESS_LABELS[String(key).split(':')[0]] || 'Processing';
+        report(label, total ? Math.round((current / total) * 100) : 0);
+      },
+    });
+  } catch (err) {
+    const message = err?.message || String(err);
+    // Session creation failing is an ort-level fault, not something about this image: every
+    // following call will fail the same way, so stop pretending each one is a fresh attempt.
+    if (/initWasm|no available backend|Failed to create session/i.test(message)) {
+      wasmPoisoned = describeModelError(message);
+      throw new Error(wasmPoisoned);
     }
+    throw err;
   }
-  throw lastError;
 };
 
 /**
