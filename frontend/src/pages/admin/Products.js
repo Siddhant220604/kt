@@ -158,13 +158,16 @@ export default function AdminProducts() {
     if (file.size > MAX_INPUT_BYTES) return toast.error(`Image too large. Please use under ${Math.round(MAX_INPUT_BYTES / 1024 / 1024)}MB.`);
     setImgBusy(b => ({ ...b, [i]: { stage: 'Starting', pct: 0 } }));
     try {
-      const { dataUrl, original, removed } = await processProductImage(file, {
+      const { dataUrl, original, removed, reason, detail } = await processProductImage(file, {
         onProgress: ({ stage, pct }) => setImgBusy(b => (b[i] ? { ...b, [i]: { stage, pct } } : b)),
       });
       setImage(i, dataUrl);
       setImgOriginals(o => ({ ...o, [i]: original }));
       if (removed) toast.success('Background removed');
-      else toast.warning("Couldn't find a subject to cut out - image was squared onto white as-is");
+      // The remover failing is not a verdict on this photo - it will fail on every photo until
+      // whatever broke is fixed, so say so instead of blaming the image.
+      else if (reason === 'model-failed') toast.error(`Background remover unavailable - image was squared onto white as-is. ${detail}`, { duration: 10000 });
+      else toast.warning("Couldn't find a subject to cut out - image was squared onto white as-is", { description: detail });
     } catch (e) {
       toast.error(e?.message || 'Could not process that image');
     } finally {

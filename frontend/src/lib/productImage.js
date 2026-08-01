@@ -76,8 +76,9 @@ const toBitmap = async (blob) => {
 const MAX_PARTIAL_SHARE = 0.10;   // fraction of the frame left semi-transparent
 const MIN_OPAQUE_SHARE = 0.05;    // fraction the model kept solidly
 
-// Tightest box containing pixels the model kept, plus how confident that matte looks. Returns
-// null when the cutout is empty or untrustworthy - the signal to keep the original photo.
+// Tightest box containing pixels the model kept, plus how confident that matte looks. `box` is
+// null when the cutout is empty or untrustworthy - the signal to keep the original photo. The
+// shares come back either way: when a cut is rejected they are the only evidence of why.
 const subjectBounds = (bitmap) => {
   const w = bitmap.width, h = bitmap.height;
   const probe = document.createElement('canvas');
@@ -99,11 +100,11 @@ const subjectBounds = (bitmap) => {
       if (y > bottom) bottom = y;
     }
   }
-  if (right < left || bottom < top) return null;
-
   const frame = w * h;
-  if (partial / frame > MAX_PARTIAL_SHARE || opaque / frame < MIN_OPAQUE_SHARE) return null;
-  return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+  const shares = { opaque: opaque / frame, partial: partial / frame };
+  if (right < left || bottom < top) return { box: null, ...shares };
+  if (shares.partial > MAX_PARTIAL_SHARE || shares.opaque < MIN_OPAQUE_SHARE) return { box: null, ...shares };
+  return { box: { x: left, y: top, w: right - left + 1, h: bottom - top + 1 }, ...shares };
 };
 
 // Draw `bitmap`'s `crop` region onto a white square, scaled to fit the padded area and centred.
@@ -167,15 +168,53 @@ const capOriginal = async (file) => {
 
 const PROGRESS_LABELS = { fetch: 'Loading background remover', compute: 'Removing background' };
 
+// The WebGPU path (device 'gpu' + the worker proxy, which the library only enables together) is
+// the fast one, but it is also the one that breaks: it depends on the driver, the jsep wasm build
+// and SharedArrayBuffer, and when any of those is unhappy onnxruntime throws rather than falling
+// back. Plain wasm on the main thread has none of those dependencies. Trying it second means a
+// machine that cannot run WebGPU still gets its cutout - slowly - instead of silently getting
+// none at all, which reads to the admin as "the model found no subject" on every single image.
+const ATTEMPTS = [
+  { device: 'gpu', proxyToWorker: true },
+  { device: 'cpu', proxyToWorker: false },
+];
+
+const runMatting = async (file, report) => {
+  let lastError = null;
+  for (const [index, attempt] of ATTEMPTS.entries()) {
+    try {
+      return await removeBackground(file, {
+        ...attempt,
+        model: MODEL,
+        publicPath: ASSET_PATH,
+        output: { format: 'image/png' },   // PNG keeps the alpha channel we need to trim against
+        progress: (key, current, total) => {
+          const label = PROGRESS_LABELS[String(key).split(':')[0]] || 'Processing';
+          report(label, total ? Math.round((current / total) * 100) : 0);
+        },
+      });
+    } catch (err) {
+      lastError = err;
+      const next = ATTEMPTS[index + 1];
+      if (!next) break;
+      console.warn(`[productImage] ${attempt.device} matting failed, retrying on ${next.device}`, err);
+    }
+  }
+  throw lastError;
+};
+
 /**
  * Cuts the background out of an image and centres the subject on a white square.
  *
  * `source` is a File/Blob (a fresh upload), a base64 data URI, or a remote http(s) URL - the
  * three things a product image slot can hold.
  *
- * Resolves to `{ dataUrl, original, removed }` where `original` is the image as it came in (so
- * the caller can offer an undo) and `removed` is false when the model found no subject - in
- * that case `dataUrl` is still squared and padded onto white, just from the original.
+ * Resolves to `{ dataUrl, original, removed, reason, detail }` where `original` is the image as
+ * it came in (so the caller can offer an undo) and `removed` is false when no usable subject
+ * came back - in that case `dataUrl` is still squared and padded onto white, just from the
+ * original. `reason` says which of the three fallbacks happened, and matters: the model failing
+ * outright is an environment problem to fix (it fails for every image, not just this one),
+ * while a rejected matte is a judgement about this one photo.
  * Rejects if the source could not be fetched, decoded, or encoded.
  */
 export async function processImageSource(source, { onProgress } = {}) {
@@ -184,36 +223,43 @@ export async function processImageSource(source, { onProgress } = {}) {
   const report = (stage, pct) => onProgress?.({ stage, pct });
 
   let cutout = null;
+  let modelError = null;
   try {
     report('Removing background', 0);
-    cutout = await removeBackground(file, {
-      model: MODEL,
-      device: 'gpu',           // falls back to wasm on CPU automatically when WebGPU is absent
-      proxyToWorker: true,
-      publicPath: ASSET_PATH,
-      output: { format: 'image/png' },   // PNG keeps the alpha channel we need to trim against
-      progress: (key, current, total) => {
-        const label = PROGRESS_LABELS[String(key).split(':')[0]] || 'Processing';
-        report(label, total ? Math.round((current / total) * 100) : 0);
-      },
-    });
+    cutout = await runMatting(file, report);
   } catch (err) {
     // Model download blocked, WebGPU/wasm unavailable, out of memory - fall through to squaring
-    // the original rather than failing the upload outright.
+    // the original rather than failing the upload outright. Keep the error: it is the whole
+    // diagnosis when the cutout stops working, and it is invisible from the composed output.
     cutout = null;
+    modelError = err;
+    console.error('[productImage] background removal failed', err);
   }
 
   report('Finishing', 100);
   const cutBitmap = cutout ? await toBitmap(cutout) : null;
-  const crop = cutBitmap ? subjectBounds(cutBitmap) : null;
+  const measured = cutBitmap ? subjectBounds(cutBitmap) : null;
+  const crop = measured?.box || null;
   const removed = Boolean(crop);
+
+  let reason = 'removed', detail = '';
+  if (modelError) {
+    reason = 'model-failed';
+    detail = modelError.message || String(modelError);
+  } else if (!removed) {
+    reason = 'low-confidence';
+    detail = measured
+      ? `kept ${(measured.opaque * 100).toFixed(1)}% solid, ${(measured.partial * 100).toFixed(1)}% partial `
+        + `(needs >${MIN_OPAQUE_SHARE * 100}% solid and <${MAX_PARTIAL_SHARE * 100}% partial)`
+      : 'the cutout could not be measured';
+  }
 
   // A cutout that came back empty means the model kept nothing - square up the original photo
   // instead, since a blank white tile is worse than an untrimmed one.
   const bitmap = removed ? cutBitmap : await toBitmap(file);
   const region = removed ? crop : { x: 0, y: 0, w: bitmap.width, h: bitmap.height };
   const dataUrl = await encodeUnderCap(composeOnWhite(bitmap, region, CANVAS_SIZE));
-  return { dataUrl, original, removed };
+  return { dataUrl, original, removed, reason, detail };
 }
 
 // The upload path is just the Blob case, named for how the admin dialog uses it.

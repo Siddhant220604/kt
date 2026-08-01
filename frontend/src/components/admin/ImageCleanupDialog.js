@@ -104,13 +104,16 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
         seen++;
         setProgress({ index: seen, total: slotCount, label: product.name, stage: 'Starting' });
         try {
-          const { dataUrl, removed } = await processImageSource(src, {
+          const { dataUrl, removed, reason, detail } = await processImageSource(src, {
             onProgress: ({ stage, pct }) => setProgress(pr => ({ ...pr, stage: pct ? `${stage} ${pct}%` : stage })),
           });
           // Only overwrite when the model actually produced a subject it was confident about.
           // Anything else stays exactly as it is - a live catalog image is not worth replacing
           // with a worse one just to make the run look complete.
           if (removed) { slots[i] = dataUrl; changed = true; cleaned++; }
+          // The remover being broken is a failure of the run, not a photo the model declined:
+          // counting it as "left alone" would report a clean sweep over images it never saw.
+          else if (reason === 'model-failed') failed.push({ name: product.name, reason: `background remover unavailable - ${detail}` });
           else untouched++;
         } catch (e) {
           failed.push({ name: product.name, reason: e?.message || 'Processing failed' });
