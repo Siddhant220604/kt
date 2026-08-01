@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, formatINR, downloadFile, errorMessage } from '../../lib/api';
 import { Button } from '../../components/ui/button';
@@ -21,7 +21,13 @@ export default function AdminProducts() {
   const [loading, setLoading] = useState(true);
   const [cats, setCats] = useState([]);
   const [edit, setEdit] = useState(null);
+  // `q` is what is in the search box; `query` is what has actually been asked for. Typing used to
+  // fire a request per keystroke, and since nothing tracked which reply belonged to which request,
+  // a slow early one could land after a later one and leave the grid showing results for a search
+  // the admin had already typed past.
   const [q, setQ] = useState('');
+  const [query, setQuery] = useState('');
+  const requestRef = useRef(0);
   const [statusFilter, setStatusFilter] = useState('all');
   const [saving, setSaving] = useState(false);
   const [sp, setSp] = useSearchParams();
@@ -34,16 +40,37 @@ export default function AdminProducts() {
   const [imgOriginals, setImgOriginals] = useState({});
   const [cleanupOpen, setCleanupOpen] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const params = { limit: 200 };
-    if (q) params.search = q;
-    const [{ data: pd }, { data: cd }] = await Promise.all([api.get('/products', { params }), api.get('/categories')]);
-    setData(pd);
-    setCats(cd);
-    setLoading(false);
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(q.trim()), 300);
+    return () => clearTimeout(t);
   }, [q]);
+
+  const load = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    setLoading(true);
+    try {
+      const params = { limit: 200 };
+      if (query) params.search = query;
+      const [{ data: pd }, { data: cd }] = await Promise.all([api.get('/products', { params }), api.get('/categories')]);
+      if (requestId !== requestRef.current) return;   // a newer search has already gone out
+      setData(pd);
+      setCats(cd);
+    } catch (e) {
+      // Without this the page sat on its loading skeletons for good whenever a request failed,
+      // since setLoading(false) was only ever reached on the happy path.
+      if (requestId === requestRef.current) toast.error(errorMessage(e, 'Could not load products'));
+    } finally {
+      if (requestId === requestRef.current) setLoading(false);
+    }
+  }, [query]);
   useEffect(() => { load(); }, [load]);
+
+  // Enter searches straight away rather than waiting out the debounce.
+  const submitSearch = (e) => {
+    e.preventDefault();
+    const term = q.trim();
+    if (term === query) load(); else setQuery(term);
+  };
 
   const visibleItems = data.items.filter(p => statusFilter === 'all' ? true : statusFilter === 'active' ? p.active : !p.active);
 
@@ -191,7 +218,7 @@ export default function AdminProducts() {
           <p className="text-sm text-muted-foreground">Manage your catalog</p>
         </div>
         <div className="flex items-center gap-2">
-          <form onSubmit={(e) => { e.preventDefault(); load(); }} className="relative">
+          <form onSubmit={submitSearch} className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products" className="pl-9 w-60" />
           </form>

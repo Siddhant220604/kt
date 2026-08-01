@@ -1045,6 +1045,20 @@ async def delete_category(cat_id: str, request: Request, payload: Dict = Depends
 
 # ------------------ PRODUCTS ------------------
 
+SEARCH_MAX_LEN = 100
+
+def contains_term(term: str) -> Dict:
+    """Case-insensitive 'contains this text' match for a user-typed search box.
+
+    The term is escaped before it reaches Mongo. Unescaped it is a regex, and this catalog's
+    names are full of regex syntax: searching "Plate | 6 inch" read as an alternation and
+    returned every plate of every size, and anything containing an unclosed bracket - "Foil
+    (Fresh", halfway through typing "Aluminium Foil | 72 mtr (Freshwrap)" - was an invalid
+    pattern that failed the query outright. Escaping makes the box mean what an admin expects
+    it to mean, and incidentally stops a hand-written pattern from pinning the server.
+    """
+    return {'$regex': re.escape(term.strip()[:SEARCH_MAX_LEN]), '$options': 'i'}
+
 @api_router.get('/products')
 async def list_products(
     category: Optional[str] = None,
@@ -1072,9 +1086,9 @@ async def list_products(
         q['price'] = pr
     if search:
         q['$or'] = [
-            {'name': {'$regex': search, '$options': 'i'}},
-            {'description': {'$regex': search, '$options': 'i'}},
-            {'tags': {'$regex': search, '$options': 'i'}},
+            {'name': contains_term(search)},
+            {'description': contains_term(search)},
+            {'tags': contains_term(search)},
         ]
     sort_map = {
         'newest': [('created_at', -1)],
@@ -2702,9 +2716,9 @@ async def list_orders(
         q['status'] = status_f
     if search:
         q['$or'] = [
-            {'id': {'$regex': search, '$options': 'i'}},
-            {'address.name': {'$regex': search, '$options': 'i'}},
-            {'address.mobile': {'$regex': search, '$options': 'i'}},
+            {'id': contains_term(search)},
+            {'address.name': contains_term(search)},
+            {'address.mobile': contains_term(search)},
         ]
     total = await db.orders.count_documents(q)
     skip = max(0, (page - 1) * limit)
@@ -2722,9 +2736,9 @@ async def export_orders(
         q['status'] = status_f
     if search:
         q['$or'] = [
-            {'id': {'$regex': search, '$options': 'i'}},
-            {'address.name': {'$regex': search, '$options': 'i'}},
-            {'address.mobile': {'$regex': search, '$options': 'i'}},
+            {'id': contains_term(search)},
+            {'address.name': contains_term(search)},
+            {'address.mobile': contains_term(search)},
         ]
     docs = await db.orders.find(q, {'_id': 0}).sort('created_at', -1).to_list(100000)
 
