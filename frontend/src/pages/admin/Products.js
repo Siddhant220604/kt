@@ -50,7 +50,9 @@ export default function AdminProducts() {
     setLoading(true);
     try {
       const params = { limit: 200 };
-      if (query) params.search = query;
+      // Names only here: this box is for finding a known product to edit, not for discovering
+      // products the way the storefront's search is.
+      if (query) { params.search = query; params.search_in = 'name'; }
       const [{ data: pd }, { data: cd }] = await Promise.all([api.get('/products', { params }), api.get('/categories')]);
       if (requestId !== requestRef.current) return;   // a newer search has already gone out
       setData(pd);

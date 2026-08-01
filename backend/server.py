@@ -1063,6 +1063,7 @@ def contains_term(term: str) -> Dict:
 async def list_products(
     category: Optional[str] = None,
     search: Optional[str] = None,
+    search_in: Optional[Literal['name', 'any']] = 'any',
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
     featured: Optional[bool] = None,
@@ -1085,11 +1086,20 @@ async def list_products(
         if max_price is not None: pr['$lte'] = max_price
         q['price'] = pr
     if search:
-        q['$or'] = [
-            {'name': contains_term(search)},
-            {'description': contains_term(search)},
-            {'tags': contains_term(search)},
-        ]
+        # Two audiences, two meanings for the same box. A customer typing "wooden" wants to be
+        # shown wooden things, so the storefront matches the description and tags as well - the
+        # toothpicks genuinely are wooden. An admin typing "wooden" is looking for a product they
+        # already know by name in order to edit it, and a list padded out with everything merely
+        # described as wooden is noise. Hence the explicit scope rather than one guessed from
+        # whether the caller happens to be signed in.
+        if search_in == 'name':
+            q['name'] = contains_term(search)
+        else:
+            q['$or'] = [
+                {'name': contains_term(search)},
+                {'description': contains_term(search)},
+                {'tags': contains_term(search)},
+            ]
     sort_map = {
         'newest': [('created_at', -1)],
         'price_asc': [('price', 1)],
