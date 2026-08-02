@@ -41,8 +41,13 @@ const toPayload = (p, images) => ({
   variant_label: p.variant_label || '',
 });
 
+// The products endpoint caps limit at 200 (MAX_PAGE_SIZE), and rejects anything higher outright
+// rather than clamping it - so a catalog has to be walked a page at a time.
+const PAGE_SIZE = 200;
+
 export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
   const [products, setProducts] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [backedUp, setBackedUp] = useState(false);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
@@ -51,18 +56,28 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
   const stopRef = useRef(false);
 
   const load = useCallback(async () => {
+    setProducts(null);
+    setLoadError(null);
     try {
-      const { data } = await api.get('/products', { params: { limit: 500 } });
-      setProducts((data.items || []).filter(p => (p.images || []).filter(Boolean).length));
+      const all = [];
+      for (let page = 1; ; page++) {
+        const { data } = await api.get('/products', { params: { limit: PAGE_SIZE, page } });
+        const items = data.items || [];
+        all.push(...items);
+        if (!items.length || page >= (data.pages || 1)) break;
+      }
+      setProducts(all.filter(p => (p.images || []).filter(Boolean).length));
     } catch (e) {
-      toast.error(errorMessage(e, 'Could not load products'));
+      // Leaving products at null here used to strand the dialog on its spinner for good, with the
+      // toast the only clue and no way on from it but closing.
+      setLoadError(errorMessage(e, 'Could not load products'));
     }
   }, []);
 
   useEffect(() => {
     if (!open) return;
     stopRef.current = false;
-    setProducts(null); setBackedUp(false); setRunning(false); setDone(false);
+    setProducts(null); setLoadError(null); setBackedUp(false); setRunning(false); setDone(false);
     setResults({ cleaned: 0, untouched: 0, skipped: 0, failed: [], blocked: null });
     load();
   }, [open, load]);
@@ -148,7 +163,15 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
       <DialogContent className="max-w-lg">
         <DialogHeader><DialogTitle>Clean up existing image backgrounds</DialogTitle></DialogHeader>
 
-        {products === null && <div className="py-8 grid place-items-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+        {products === null && !loadError && <div className="py-8 grid place-items-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+
+        {loadError && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-1 text-sm">
+            <div className="font-medium">Could not load the product list.</div>
+            <p className="text-xs text-muted-foreground break-words">{loadError}</p>
+            <p className="text-xs">Nothing has been changed. Try again, or close and reopen this dialog.</p>
+          </div>
+        )}
 
         {products !== null && !running && !done && (
           <div className="space-y-4 text-sm">
@@ -192,7 +215,8 @@ export default function ImageCleanupDialog({ open, onOpenChange, onDone }) {
         )}
 
         <DialogFooter>
-          {!running && !done && <Button onClick={run} disabled={!backedUp || !slotCount} data-testid="cleanup-start">{backedUp ? `Clean up ${slotCount} image${slotCount === 1 ? '' : 's'}` : 'Download the backup first'}</Button>}
+          {loadError && !running && !done && <Button variant="outline" onClick={load} data-testid="cleanup-retry">Try again</Button>}
+          {!loadError && !running && !done && <Button onClick={run} disabled={!backedUp || !slotCount} data-testid="cleanup-start">{backedUp ? `Clean up ${slotCount} image${slotCount === 1 ? '' : 's'}` : 'Download the backup first'}</Button>}
           {running && <Button variant="outline" onClick={() => { stopRef.current = true; }}>Stop after this image</Button>}
           {done && <Button onClick={() => onOpenChange(false)}>Close</Button>}
         </DialogFooter>
