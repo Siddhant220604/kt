@@ -99,7 +99,7 @@ export default function Cart() {
               <Button size="lg" className="w-full mt-4 gap-2" onClick={() => navigate('/checkout', { state: { coupon: applied, discount } })} data-testid="proceed-to-checkout">
                 Proceed to Checkout <ArrowRight className="h-4 w-4" />
               </Button>
-              <a href={`https://wa.me/${settings.whatsapp || '919876543210'}`} target="_blank" rel="noreferrer" className="mt-2 block">
+              <a href={`https://wa.me/${settings.whatsapp || '919044057739'}`} target="_blank" rel="noreferrer" className="mt-2 block">
                 <Button variant="outline" className="w-full gap-2"><MessageCircle className="h-4 w-4" />Order via WhatsApp</Button>
               </a>
             </div>

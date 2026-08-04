@@ -78,7 +78,7 @@ export default function ProductDetail() {
   const unitPrice = computeUnitPrice(product.price, product.price_tiers, qty);
   const hasTiers = product.price_tiers && product.price_tiers.length > 0;
 
-  const wa = `https://wa.me/${settings.whatsapp || '919876543210'}?text=${encodeURIComponent(`Hi Kiran Traders, I want to enquire bulk price for: ${product.name} (${product.size || ''}). Quantity needed: `)}`;
+  const wa = `https://wa.me/${settings.whatsapp || '919044057739'}?text=${encodeURIComponent(`Hi Kiran Traders, I want to enquire bulk price for: ${product.name} (${product.size || ''}). Quantity needed: `)}`;
 
   // Structured data so Google can show price/stock/rating directly in search results.
   const productJsonLd = {

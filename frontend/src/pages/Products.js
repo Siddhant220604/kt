@@ -150,7 +150,7 @@ export default function Products() {
                   <p className="text-sm text-muted-foreground mt-1">Try removing filters, or WhatsApp us your requirement.</p>
                   <div className="mt-4 flex gap-3 justify-center">
                     <Button onClick={() => setSp(new URLSearchParams())}>Clear filters</Button>
-                    <a href={`https://wa.me/${settings.whatsapp || '919876543210'}`} target="_blank" rel="noreferrer">
+                    <a href={`https://wa.me/${settings.whatsapp || '919044057739'}`} target="_blank" rel="noreferrer">
                       <Button variant="outline" className="gap-2"><MessageCircle className="h-4 w-4" />WhatsApp Inquiry</Button>
                     </a>
                   </div>

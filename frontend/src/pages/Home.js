@@ -48,7 +48,7 @@ export default function Home() {
   }, []);
 
   const hero = banners[0];
-  const wa = `https://wa.me/${settings.whatsapp || '919876543210'}?text=${encodeURIComponent('Hi Kiran Traders, I would like to enquire about wholesale packaging products.')}`;
+  const wa = `https://wa.me/${settings.whatsapp || '919044057739'}?text=${encodeURIComponent('Hi Kiran Traders, I would like to enquire about wholesale packaging products.')}`;
 
   return (
     <div>
@@ -218,7 +218,7 @@ export default function Home() {
             </div>
             <div className="flex flex-wrap gap-3 md:justify-end relative z-10">
               <a href={wa} target="_blank" rel="noreferrer"><Button size="lg" className="bg-[hsl(var(--brand-teal))] text-white hover:bg-[hsl(var(--brand-teal))]/90 gap-2" data-testid="cta-whatsapp"><MessageCircle className="h-4 w-4" /> WhatsApp Now</Button></a>
-              <a href={`tel:${settings.phone || '+919876543210'}`}><Button size="lg" variant="secondary" className="gap-2" data-testid="cta-call"><Phone className="h-4 w-4" /> Call {settings.phone || '+91 98765 43210'}</Button></a>
+              <a href={`tel:${settings.phone || '+919044057739'}`}><Button size="lg" variant="secondary" className="gap-2" data-testid="cta-call"><Phone className="h-4 w-4" /> Call {settings.phone || '+91 9044057739'}</Button></a>
             </div>
           </div>
         </Container>

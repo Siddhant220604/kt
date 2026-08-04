@@ -41,7 +41,7 @@ const Header = () => {
         <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between gap-4">
           <span className="flex items-center gap-1.5"><Truck className="h-3.5 w-3.5" /> Bulk order discounts — WhatsApp us</span>
           <span className="hidden sm:flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> {settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</span>
-          <a href={`tel:${settings.phone || '+919876543210'}`} className="hidden md:flex items-center gap-1.5 hover:underline"><Phone className="h-3.5 w-3.5" /> {settings.phone || '+91 98765 43210'}</a>
+          <a href={`tel:${settings.phone || '+919044057739'}`} className="hidden md:flex items-center gap-1.5 hover:underline"><Phone className="h-3.5 w-3.5" /> {settings.phone || '+91 9044057739'}</a>
         </div>
       </div>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -136,8 +136,8 @@ const Footer = () => {
           </div>
           <p className="text-sm text-muted-foreground">Wholesale & Retail packaging essentials. Trusted in Lucknow since 1996.</p>
           <div className="mt-4 flex items-center gap-2">
-            <a href={`https://wa.me/${settings.whatsapp || '919876543210'}`} target="_blank" rel="noreferrer" data-testid="footer-whatsapp" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[hsl(var(--brand-teal))] text-white text-sm"><MessageCircle className="h-4 w-4" /> WhatsApp</a>
-            <a href={`tel:${settings.phone || '+919876543210'}`} data-testid="footer-call" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm"><Phone className="h-4 w-4" /> Call</a>
+            <a href={`https://wa.me/${settings.whatsapp || '919044057739'}`} target="_blank" rel="noreferrer" data-testid="footer-whatsapp" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[hsl(var(--brand-teal))] text-white text-sm"><MessageCircle className="h-4 w-4" /> WhatsApp</a>
+            <a href={`tel:${settings.phone || '+919044057739'}`} data-testid="footer-call" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm"><Phone className="h-4 w-4" /> Call</a>
           </div>
         </div>
         <div>
@@ -166,7 +166,7 @@ const Footer = () => {
           <h4 className="font-display font-semibold mb-3">Contact</h4>
           <ul className="space-y-2 text-sm text-muted-foreground">
             <li className="flex items-start gap-2"><MapPin className="h-4 w-4 mt-0.5 shrink-0" />{settings.address || 'Sector K, 805-D, Aashiyana, Lucknow, UP'}</li>
-            <li className="flex items-center gap-2"><Phone className="h-4 w-4" />{settings.phone || '+91 98765 43210'}</li>
+            <li className="flex items-center gap-2"><Phone className="h-4 w-4" />{settings.phone || '+91 9044057739'}</li>
             <li className="flex items-center gap-2"><Clock className="h-4 w-4" />{settings.hours || 'Mon-Wed, Fri-Sun 10-8'}</li>
           </ul>
         </div>
@@ -186,7 +186,7 @@ const MobileBottomBar = () => {
       <div className="grid grid-cols-4 h-14">
         <Link to="/" className="flex flex-col items-center justify-center text-xs gap-0.5"><HomeIcon className="h-5 w-5" />Home</Link>
         <Link to="/products" className="flex flex-col items-center justify-center text-xs gap-0.5"><Package className="h-5 w-5" />Shop</Link>
-        <a href={`https://wa.me/${settings.whatsapp || '919876543210'}`} target="_blank" rel="noreferrer" className="flex flex-col items-center justify-center text-xs gap-0.5 text-[hsl(var(--brand-teal))]" data-testid="mobile-whatsapp-cta"><MessageCircle className="h-5 w-5" />WhatsApp</a>
+        <a href={`https://wa.me/${settings.whatsapp || '919044057739'}`} target="_blank" rel="noreferrer" className="flex flex-col items-center justify-center text-xs gap-0.5 text-[hsl(var(--brand-teal))]" data-testid="mobile-whatsapp-cta"><MessageCircle className="h-5 w-5" />WhatsApp</a>
         <Link to="/cart" className="flex flex-col items-center justify-center text-xs gap-0.5 relative">
           <ShoppingCart className="h-5 w-5" />Cart
           {count > 0 && <span className="absolute top-1 right-6 h-4 min-w-4 px-1 grid place-items-center text-[10px] rounded-full bg-[hsl(var(--brand-marigold))] text-black">{count}</span>}

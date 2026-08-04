@@ -85,7 +85,7 @@ export default function About() {
           <SectionTitle title="Visit Our Store" center />
           <div className="grid md:grid-cols-3 gap-4">
             <div className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3"><MapPin className="h-5 w-5 text-[hsl(var(--brand-terracotta))]" /><div><div className="font-semibold">Address</div><div className="text-sm text-muted-foreground">{settings.address || 'Sector K, 805-D, Aashiyana, Lucknow, UP 226012'}</div></div></div>
-            <div className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3"><Phone className="h-5 w-5 text-[hsl(var(--brand-terracotta))]" /><div><div className="font-semibold">Phone</div><div className="text-sm text-muted-foreground">{settings.phone || '+91 98765 43210'}</div></div></div>
+            <div className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3"><Phone className="h-5 w-5 text-[hsl(var(--brand-terracotta))]" /><div><div className="font-semibold">Phone</div><div className="text-sm text-muted-foreground">{settings.phone || '+91 9044057739'}</div></div></div>
             <div className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3"><Clock className="h-5 w-5 text-[hsl(var(--brand-terracotta))]" /><div><div className="font-semibold">Hours</div><div className="text-sm text-muted-foreground">{settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</div></div></div>
           </div>
         </Container>

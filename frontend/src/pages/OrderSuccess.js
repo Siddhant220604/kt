@@ -61,7 +61,7 @@ export default function OrderSuccess() {
             </a>
           </div>
           <div className="mt-3 flex gap-3">
-            <a href={`https://wa.me/${settings.whatsapp || '919876543210'}?text=${encodeURIComponent(`Hi, I just placed order ${orderId}`)}`} target="_blank" rel="noreferrer" className="flex-1">
+            <a href={`https://wa.me/${settings.whatsapp || '919044057739'}?text=${encodeURIComponent(`Hi, I just placed order ${orderId}`)}`} target="_blank" rel="noreferrer" className="flex-1">
               <Button className="w-full gap-2 bg-[hsl(var(--brand-teal))] hover:bg-[hsl(var(--brand-teal))]/90"><MessageCircle className="h-4 w-4" />WhatsApp Us</Button>
             </a>
             <Link to="/products" className="flex-1"><Button className="w-full gap-2">Continue Shopping <ArrowRight className="h-4 w-4" /></Button></Link>
