@@ -9,6 +9,26 @@ import { useSettings } from '../../lib/settings';
 
 const readFileAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
 
+// Every image setting takes either an uploaded file, stored as a base64 data URI, or the URL of
+// an image hosted somewhere else - the backend accepts both (validate_image_field).
+//
+// An uploaded image is deliberately not shown in the URL box: it is up to 2MB of base64 text, and
+// a controlled input holding that re-renders on every keystroke. The placeholder says so instead,
+// and typing a URL still replaces it.
+const ImageSource = ({ value, onUrl, onFile }) => {
+  const uploaded = typeof value === 'string' && value.startsWith('data:');
+  return (
+    <>
+      <Input
+        value={uploaded ? '' : (value || '')}
+        placeholder={uploaded ? 'Uploaded image - paste a URL to replace it' : 'https://...'}
+        onChange={(e) => onUrl(e.target.value)}
+      />
+      <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => onFile(e.target.files[0])} />
+    </>
+  );
+};
+
 export default function AdminSettings() {
   const { settings: s, reload } = useSettings();
   const [form, setForm] = useState({});
@@ -89,7 +109,7 @@ export default function AdminSettings() {
       </div>
       <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
         <div className="font-display font-semibold">Homepage Images</div>
-        <p className="text-xs text-muted-foreground">Shown in the hero image collage on the homepage. PNG/JPEG/WEBP, under 2MB each.</p>
+        <p className="text-xs text-muted-foreground">Shown in the hero image collage on the homepage. Paste an image URL or upload a file - PNG/JPEG/WEBP, under 2MB each.</p>
         <div className="grid sm:grid-cols-4 gap-3">
           {[1, 2, 3, 4].map((n) => (
             <div key={n} className="space-y-2">
@@ -101,7 +121,11 @@ export default function AdminSettings() {
                   <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
                 )}
               </div>
-              <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage(`hero_image_${n}`, e.target.files[0])} />
+              <ImageSource
+                value={form[`hero_image_${n}`]}
+                onUrl={(v) => upd(`hero_image_${n}`, v)}
+                onFile={(f) => uploadImage(`hero_image_${n}`, f)}
+              />
             </div>
           ))}
         </div>
@@ -111,7 +135,7 @@ export default function AdminSettings() {
         <div className="grid sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Banner Background</Label>
-            <p className="text-xs text-muted-foreground">Sits behind the heading at the top of the About page. A wide shot works best. PNG/JPEG/WEBP, under 2MB.</p>
+            <p className="text-xs text-muted-foreground">Sits behind the heading at the top of the About page. A wide shot works best. Paste an image URL or upload a file - PNG/JPEG/WEBP, under 2MB.</p>
             <div className="aspect-video rounded-xl overflow-hidden border border-border bg-muted">
               {form.about_hero_image ? (
                 <img src={form.about_hero_image} alt="About banner" className="w-full h-full object-cover" />
@@ -119,11 +143,15 @@ export default function AdminSettings() {
                 <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
               )}
             </div>
-            <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage('about_hero_image', e.target.files[0])} />
+            <ImageSource
+              value={form.about_hero_image}
+              onUrl={(v) => upd('about_hero_image', v)}
+              onFile={(f) => uploadImage('about_hero_image', f)}
+            />
           </div>
           <div className="space-y-2">
             <Label>Our Story Photo</Label>
-            <p className="text-xs text-muted-foreground">Shown next to "Our Story" further down the page. PNG/JPEG/WEBP, under 2MB.</p>
+            <p className="text-xs text-muted-foreground">Shown next to "Our Story" further down the page. Paste an image URL or upload a file - PNG/JPEG/WEBP, under 2MB.</p>
             <div className="aspect-video rounded-xl overflow-hidden border border-border bg-muted">
               {form.about_image ? (
                 <img src={form.about_image} alt="About" className="w-full h-full object-cover" />
@@ -131,7 +159,11 @@ export default function AdminSettings() {
                 <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
               )}
             </div>
-            <Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadImage('about_image', e.target.files[0])} />
+            <ImageSource
+              value={form.about_image}
+              onUrl={(v) => upd('about_image', v)}
+              onFile={(f) => uploadImage('about_image', f)}
+            />
           </div>
         </div>
       </div>
