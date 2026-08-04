@@ -67,7 +67,6 @@ python-dotenv==1.2.2
 python-multipart==0.0.32
 pytokens==0.4.1
 PyYAML==6.0.3
-qrcode==8.2
 referencing==0.37.0
 regex==2026.6.28
 reportlab==5.0.0

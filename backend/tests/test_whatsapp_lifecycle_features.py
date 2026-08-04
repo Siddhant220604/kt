@@ -97,7 +97,7 @@ def test_build_invoice_pdf_without_logo_still_works():
 
 
 def test_build_invoice_pdf_with_logo_embeds_without_error():
-    # 1x1 transparent PNG, base64-encoded, as a data URI (same shape as settings.upi_qr)
+    # 1x1 transparent PNG, base64-encoded, as a data URI (same shape as settings.logo)
     tiny_png = base64.b64decode(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
     )

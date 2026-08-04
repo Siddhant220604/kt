@@ -22,7 +22,6 @@ import re
 import math
 import base64
 import time
-import qrcode
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -720,8 +719,6 @@ class SettingsIn(BaseModel):
     phone2: Optional[str] = Field(None, max_length=20)
     whatsapp: Optional[str] = Field(None, max_length=20)
     email: Optional[EmailStr] = None
-    upi_id: Optional[str] = Field(None, max_length=100)
-    upi_qr: Optional[str] = Field(None, max_length=2_800_000)
     logo: Optional[str] = Field(None, max_length=2_800_000)
     hero_image_1: Optional[str] = Field(None, max_length=2_800_000)
     hero_image_2: Optional[str] = Field(None, max_length=2_800_000)
@@ -753,11 +750,6 @@ class SettingsIn(BaseModel):
     @classmethod
     def validate_logo(cls, v: Optional[str]) -> Optional[str]:
         return validate_image_field(v, 'Logo')
-
-    @field_validator('upi_qr')
-    @classmethod
-    def validate_upi_qr(cls, v: Optional[str]) -> Optional[str]:
-        return validate_image_field(v, 'UPI QR code')
 
     @field_validator('hero_image_1')
     @classmethod
@@ -3613,7 +3605,11 @@ async def get_settings():
     cached = cache_get('settings')
     if cached is not None:
         return cached
-    s = await db.settings.find_one({'id': 'main'}, {'_id': 0}) or {}
+    # upi_qr/upi_id are projected out rather than merely no longer written: payment goes through
+    # Razorpay, nothing renders them, and a database seeded before that change still holds the QR
+    # as a base64 PNG - which this public endpoint would otherwise ship to every visitor on every
+    # page load.
+    s = await db.settings.find_one({'id': 'main'}, {'_id': 0, 'upi_qr': 0, 'upi_id': 0}) or {}
     if not s.get('email'):
         s['email'] = DEFAULT_BUSINESS_EMAIL
     cache_set('settings', s)
@@ -4362,13 +4358,6 @@ async def seed_db():
 
     # settings
     if not await db.settings.find_one({'id': 'main'}):
-        upi_id = 'kirantraders@ybl'
-        # generate UPI QR image
-        qr_data = f'upi://pay?pa={upi_id}&pn=Kiran%20Traders&cu=INR'
-        img = qrcode.make(qr_data)
-        # qrcode's PilImage.save does accept format=; pyright resolves the narrower BaseImage.save.
-        buf = io.BytesIO(); img.save(buf, format='PNG')  # pyright: ignore[reportCallIssue]
-        qr_b64 = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
         await db.settings.insert_one({
             'id': 'main',
             'business_name': 'Kiran Traders',
@@ -4379,8 +4368,6 @@ async def seed_db():
             'phone2': '+91 9044097739',
             'whatsapp': '919044057739',
             'email': 'kirantraders1996@gmail.com',
-            'upi_id': upi_id,
-            'upi_qr': qr_b64,
             'bank_details': 'Account Name: Kiran Traders\nBank: State Bank of India\nA/C No: 12345678901\nIFSC: SBIN0001234\nBranch: Aashiyana, Lucknow',
             'hours': 'Mon-Wed, Fri-Sun: 10:00 AM - 8:00 PM | Thursday: Closed',
             'gstin': '09AAAAA0000A1Z5',

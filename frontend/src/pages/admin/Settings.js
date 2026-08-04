@@ -47,13 +47,6 @@ export default function AdminSettings() {
     finally { setSaving(false); }
   };
 
-  const uploadQR = async (file) => {
-    if (!file) return;
-    if (file.size > 512 * 1024) return toast.error('QR too large. Please use <512KB.');
-    const b64 = await readFileAsDataURL(file);
-    upd('upi_qr', b64);
-  };
-
   const uploadImage = async (key, file) => {
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) return toast.error('Image too large. Please use under 2MB.');

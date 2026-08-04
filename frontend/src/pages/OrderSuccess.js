@@ -39,11 +39,6 @@ export default function OrderSuccess() {
               <div className="flex justify-between"><span>Deliver to</span><b>{order.address?.name}, {order.address?.city}</b></div>
             </div>
           )}
-          {order && (order.payment_method === 'upi' || order.payment_method === 'bank_transfer') && (
-            <div className="mt-4 text-sm bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-100 rounded-xl p-4 text-left">
-              <b>Action required:</b> Please complete the payment and send screenshot to WhatsApp <b>{settings.whatsapp}</b>. Order will be confirmed once payment is verified.
-            </div>
-          )}
           <div className="mt-6 grid sm:grid-cols-2 gap-3">
             <Link to={`/track/${orderId}`} state={{ mobile }}><Button variant="outline" className="w-full gap-2"><Truck className="h-4 w-4" />Track Order</Button></Link>
             <a
