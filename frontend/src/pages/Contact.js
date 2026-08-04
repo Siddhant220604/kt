@@ -46,13 +46,13 @@ export default function Contact() {
           <div className="space-y-3">
             <div className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3">
               <MapPin className="h-5 w-5 text-[hsl(var(--brand-terracotta))] mt-0.5" />
-              <div><div className="font-semibold">Address</div><div className="text-sm text-muted-foreground">{settings.address}</div></div>
+              <div><div className="font-semibold">Address</div><div className="text-sm text-muted-foreground">{settings.address || '253/121, Below Jaiswal Dharamshala, Nehru Cross, Nadan Mahal Road, Lucknow – 226004, Uttar Pradesh'}</div></div>
             </div>
-            <a href={`tel:${settings.phone}`} className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3 hover:bg-muted/40 transition">
+            <a href={`tel:${settings.phone || '+919044057739'}`} className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3 hover:bg-muted/40 transition">
               <Phone className="h-5 w-5 text-[hsl(var(--brand-terracotta))] mt-0.5" />
-              <div><div className="font-semibold">Call</div><div className="text-sm text-muted-foreground">{settings.phone}</div></div>
+              <div><div className="font-semibold">Call</div><div className="text-sm text-muted-foreground">{settings.phone || '+91 9044057739'}</div></div>
             </a>
-            <a href={`https://wa.me/${settings.whatsapp}`} target="_blank" rel="noreferrer" className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3 hover:bg-muted/40 transition" data-testid="contact-whatsapp">
+            <a href={`https://wa.me/${settings.whatsapp || '919044057739'}`} target="_blank" rel="noreferrer" className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3 hover:bg-muted/40 transition" data-testid="contact-whatsapp">
               <MessageCircle className="h-5 w-5 text-[hsl(var(--brand-teal))] mt-0.5" />
               <div><div className="font-semibold">WhatsApp</div><div className="text-sm text-muted-foreground">Fastest response</div></div>
             </a>
@@ -62,7 +62,7 @@ export default function Contact() {
             </a>
             <div className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3">
               <Clock className="h-5 w-5 text-[hsl(var(--brand-terracotta))] mt-0.5" />
-              <div><div className="font-semibold">Business Hours</div><div className="text-sm text-muted-foreground">{settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</div></div>
+              <div><div className="font-semibold">Business Hours</div><div className="text-sm text-muted-foreground">{settings.hours || 'Mon-Wed, Fri-Sun: 10:00 AM - 8:00 PM | Thursday: Closed'}</div></div>
             </div>
           </div>
         </div>

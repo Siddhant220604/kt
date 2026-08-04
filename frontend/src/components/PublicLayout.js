@@ -40,7 +40,7 @@ const Header = () => {
       <div className="bg-primary text-primary-foreground text-xs">
         <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between gap-4">
           <span className="flex items-center gap-1.5"><Truck className="h-3.5 w-3.5" /> Bulk order discounts — WhatsApp us</span>
-          <span className="hidden sm:flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> {settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</span>
+          <span className="hidden sm:flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> {settings.hours || 'Mon-Wed, Fri-Sun: 10:00 AM - 8:00 PM | Thursday: Closed'}</span>
           <a href={`tel:${settings.phone || '+919044057739'}`} className="hidden md:flex items-center gap-1.5 hover:underline"><Phone className="h-3.5 w-3.5" /> {settings.phone || '+91 9044057739'}</a>
         </div>
       </div>
@@ -165,9 +165,9 @@ const Footer = () => {
         <div>
           <h4 className="font-display font-semibold mb-3">Contact</h4>
           <ul className="space-y-2 text-sm text-muted-foreground">
-            <li className="flex items-start gap-2"><MapPin className="h-4 w-4 mt-0.5 shrink-0" />{settings.address || 'Sector K, 805-D, Aashiyana, Lucknow, UP'}</li>
+            <li className="flex items-start gap-2"><MapPin className="h-4 w-4 mt-0.5 shrink-0" />{settings.address || '253/121, Below Jaiswal Dharamshala, Nehru Cross, Nadan Mahal Road, Lucknow – 226004, Uttar Pradesh'}</li>
             <li className="flex items-center gap-2"><Phone className="h-4 w-4" />{settings.phone || '+91 9044057739'}</li>
-            <li className="flex items-center gap-2"><Clock className="h-4 w-4" />{settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</li>
+            <li className="flex items-center gap-2"><Clock className="h-4 w-4" />{settings.hours || 'Mon-Wed, Fri-Sun: 10:00 AM - 8:00 PM | Thursday: Closed'}</li>
           </ul>
         </div>
       </div>
