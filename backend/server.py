@@ -274,6 +274,10 @@ def validate_image_field(value: Optional[str], field_label: str) -> Optional[str
     - None/'' (field not provided) passes through untouched.
     - A plain http(s):// URL passes through untouched (nothing to decode - the image itself
       lives on whatever host serves that URL, out of this app's control either way).
+    - A site-relative path like /images/hero-1.jpg passes through too: those are files the
+      frontend ships in public/, which is how an image gets shown without being carried around
+      inside the settings document as base64. A leading // is rejected - that is a
+      protocol-relative URL to another host wearing a path's clothes.
     - A data: URI must declare an allow-listed image MIME type, decode as valid base64, be
       under MAX_IMAGE_BYTES once decoded, and Pillow must be able to open the decoded bytes and
       confirm they're a genuine image whose actual format matches what was declared.
@@ -284,8 +288,10 @@ def validate_image_field(value: Optional[str], field_label: str) -> Optional[str
         return value
     if value.startswith('http://') or value.startswith('https://'):
         return value
+    if value.startswith('/') and not value.startswith('//'):
+        return value
     if not value.startswith('data:'):
-        raise ValueError(f'{field_label} must be an image URL or a base64 data URI')
+        raise ValueError(f'{field_label} must be an image URL, a site-relative path, or a base64 data URI')
 
     try:
         header, b64_data = value.split(',', 1)

@@ -15,7 +15,7 @@ const HIGHLIGHTS = [
 
 export default function About() {
   const { settings } = useSettings();
-  const bannerImg = settings.about_hero_image;
+  const bannerImg = settings.about_hero_image || '/images/about-banner.jpg';
   return (
     <div>
       <Seo title="About Us" description="Kiran Traders - Lucknow's trusted wholesale packaging partner since 1996. Thermocol plates, carry bags, disposables & more." />
@@ -55,7 +55,7 @@ export default function About() {
             </div>
             <div>
               <img
-                src={settings.about_image || 'https://images.unsplash.com/photo-1705846973668-0e9ed382ea8f?w=1200&q=80'}
+                src={settings.about_image || '/images/about-story.jpg'}
                 alt="About"
                 className="w-full h-auto max-w-md mx-auto rounded-2xl border border-border shadow-lg"
               />
