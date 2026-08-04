@@ -167,7 +167,7 @@ const Footer = () => {
           <ul className="space-y-2 text-sm text-muted-foreground">
             <li className="flex items-start gap-2"><MapPin className="h-4 w-4 mt-0.5 shrink-0" />{settings.address || 'Sector K, 805-D, Aashiyana, Lucknow, UP'}</li>
             <li className="flex items-center gap-2"><Phone className="h-4 w-4" />{settings.phone || '+91 9044057739'}</li>
-            <li className="flex items-center gap-2"><Clock className="h-4 w-4" />{settings.hours || 'Mon-Wed, Fri-Sun 10-8'}</li>
+            <li className="flex items-center gap-2"><Clock className="h-4 w-4" />{settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</li>
           </ul>
         </div>
       </div>

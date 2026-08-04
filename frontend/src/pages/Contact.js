@@ -62,7 +62,7 @@ export default function Contact() {
             </a>
             <div className="bg-card border border-border rounded-2xl p-5 flex items-start gap-3">
               <Clock className="h-5 w-5 text-[hsl(var(--brand-terracotta))] mt-0.5" />
-              <div><div className="font-semibold">Business Hours</div><div className="text-sm text-muted-foreground">{settings.hours}</div></div>
+              <div><div className="font-semibold">Business Hours</div><div className="text-sm text-muted-foreground">{settings.hours || 'Mon-Wed, Fri-Sun 10-8 | Thu Closed'}</div></div>
             </div>
           </div>
         </div>
