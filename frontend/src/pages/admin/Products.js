@@ -9,10 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from '../../components/ui/badge';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from '../../components/ui/dialog';
-import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, FileSpreadsheet, Loader2, Undo2, Wand2 } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { processProductImage, MAX_INPUT_BYTES } from '../../lib/productImage';
-import ImageCleanupDialog from '../../components/admin/ImageCleanupDialog';
 
 const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specsList: [], featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '', variant_group: '', variant_label: '' };
 
@@ -33,12 +32,9 @@ export default function AdminProducts() {
   const [sp, setSp] = useSearchParams();
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
-  // Per-image-slot upload state, both keyed by the slot's index in `edit.images`:
-  // `imgBusy` drives the in-place progress readout, `imgOriginals` holds the untouched upload so
-  // the admin can undo a cutout the model got wrong. Both are reindexed alongside `edit.images`.
+  // Which image slots are mid-upload, keyed by the slot's index in `edit.images`, so each row can
+  // show its own spinner. Reindexed alongside `edit.images` when a slot is removed.
   const [imgBusy, setImgBusy] = useState({});
-  const [imgOriginals, setImgOriginals] = useState({});
-  const [cleanupOpen, setCleanupOpen] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setQuery(q.trim()), 300);
@@ -167,49 +163,27 @@ export default function AdminProducts() {
 
   const addImage = () => setEdit(e => ({ ...e, images: [...(e.images || []), ''] }));
   const setImage = (i, v) => setEdit(e => ({ ...e, images: e.images.map((x, idx) => idx === i ? v : x) }));
-  // Typing a URL over a processed slot discards the undo - the stored original is no longer the
-  // source of what's in the box.
-  const editImageUrl = (i, v) => { setImage(i, v); setImgOriginals(o => { const n = { ...o }; delete n[i]; return n; }); };
 
-  // Removing slot `i` shifts every later slot down one, so the index-keyed maps have to shift too
-  // or an undo button would end up attached to the wrong image.
-  const shiftKeysAfter = (map, removed) => Object.fromEntries(
-    Object.entries(map).filter(([k]) => Number(k) !== removed).map(([k, v]) => [Number(k) > removed ? Number(k) - 1 : Number(k), v])
-  );
+  // Removing slot `i` shifts every later slot down one, so the index-keyed busy map has to shift
+  // too or a spinner would end up attached to the wrong image.
   const rmImage = (i) => {
     setEdit(e => ({ ...e, images: e.images.filter((_, idx) => idx !== i) }));
-    setImgBusy(b => shiftKeysAfter(b, i));
-    setImgOriginals(o => shiftKeysAfter(o, i));
+    setImgBusy(b => Object.fromEntries(
+      Object.entries(b).filter(([k]) => Number(k) !== i).map(([k, v]) => [Number(k) > i ? Number(k) - 1 : Number(k), v])
+    ));
   };
 
   const uploadImage = async (i, file) => {
     if (!file) return;
     if (file.size > MAX_INPUT_BYTES) return toast.error(`Image too large. Please use under ${Math.round(MAX_INPUT_BYTES / 1024 / 1024)}MB.`);
-    setImgBusy(b => ({ ...b, [i]: { stage: 'Starting', pct: 0 } }));
+    setImgBusy(b => ({ ...b, [i]: true }));
     try {
-      const { dataUrl, original, removed, reason, detail } = await processProductImage(file, {
-        onProgress: ({ stage, pct }) => setImgBusy(b => (b[i] ? { ...b, [i]: { stage, pct } } : b)),
-      });
-      setImage(i, dataUrl);
-      setImgOriginals(o => ({ ...o, [i]: original }));
-      if (removed) toast.success('Background removed');
-      // The remover failing is not a verdict on this photo - it will fail on every photo until
-      // whatever broke is fixed, so say so instead of blaming the image.
-      else if (reason === 'model-failed') toast.error(`Background remover unavailable - image was squared onto white as-is. ${detail}`, { duration: 10000 });
-      else toast.warning("Couldn't find a subject to cut out - image was squared onto white as-is", { description: detail });
+      setImage(i, await processProductImage(file));
     } catch (e) {
       toast.error(e?.message || 'Could not process that image');
     } finally {
       setImgBusy(b => { const n = { ...b }; delete n[i]; return n; });
     }
-  };
-
-  const undoImage = (i) => {
-    const original = imgOriginals[i];
-    if (!original) return;
-    setImage(i, original);
-    setImgOriginals(o => { const n = { ...o }; delete n[i]; return n; });
-    toast.info('Restored the original photo');
   };
 
   return (
@@ -232,7 +206,6 @@ export default function AdminProducts() {
               <SelectItem value="inactive">Draft</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={() => setCleanupOpen(true)} className="gap-1" title="Remove backgrounds from images uploaded before this feature existed" data-testid="admin-cleanup-images"><Wand2 className="h-4 w-4" />Clean up images</Button>
           <Button variant="outline" onClick={downloadTemplate} className="gap-1" title="Download a blank CSV to fill in"><FileSpreadsheet className="h-4 w-4" />Template</Button>
           <Button variant="outline" onClick={exportCsv} className="gap-1" data-testid="admin-export-products"><Download className="h-4 w-4" />Export CSV</Button>
           <label className="cursor-pointer">
@@ -354,11 +327,10 @@ export default function AdminProducts() {
 
               <div>
                 <Label className="text-xs text-muted-foreground">Images (URLs or upload)</Label>
-                <p className="text-[11px] text-muted-foreground mt-0.5">Uploads get their background removed and are centred on a white square. The first one takes a minute while the remover downloads.</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Large uploads are resized so they fit within the save limit.</p>
                 <div className="space-y-2 mt-1.5">
                   {edit.images.map((im, i) => {
                     const busy = imgBusy[i];
-                    const original = imgOriginals[i];
                     return (
                     <div key={i} className="flex gap-2 items-center">
                       {busy
@@ -367,10 +339,9 @@ export default function AdminProducts() {
                           ? <img src={im} className="h-12 w-12 rounded object-contain bg-white border border-border shrink-0" alt="" />
                           : <div className="h-12 w-12 rounded bg-muted grid place-items-center shrink-0"><ImageIcon className="h-4 w-4 text-muted-foreground" /></div>}
                       {busy
-                        ? <div className="flex-1 min-w-0"><div className="text-xs text-muted-foreground truncate">{busy.stage}{busy.pct ? ` ${busy.pct}%` : ''}</div><div className="h-1 mt-1 rounded bg-muted overflow-hidden"><div className="h-full bg-primary transition-all" style={{ width: `${busy.pct || 0}%` }} /></div></div>
-                        : <Input value={im} onChange={(e) => editImageUrl(i, e.target.value)} placeholder="https://..." data-testid={`admin-product-image-${i}`} />}
-                      {original && !busy && <Button type="button" variant="ghost" size="icon" onClick={() => undoImage(i)} title="Restore the original photo" data-testid={`admin-product-image-undo-${i}`}><Undo2 className="h-4 w-4" /></Button>}
-                      <label className={busy ? 'pointer-events-none opacity-50' : 'cursor-pointer'}><input type="file" accept="image/*" className="hidden" disabled={!!busy} onChange={(e) => { uploadImage(i, e.target.files[0]); e.target.value = ''; }} /><Button asChild variant="outline" size="sm"><span className="gap-1"><Wand2 className="h-3 w-3" />Upload</span></Button></label>
+                        ? <div className="flex-1 min-w-0"><div className="text-xs text-muted-foreground truncate">Processing…</div></div>
+                        : <Input value={im} onChange={(e) => setImage(i, e.target.value)} placeholder="https://..." data-testid={`admin-product-image-${i}`} />}
+                      <label className={busy ? 'pointer-events-none opacity-50' : 'cursor-pointer'}><input type="file" accept="image/*" className="hidden" disabled={!!busy} onChange={(e) => { uploadImage(i, e.target.files[0]); e.target.value = ''; }} /><Button asChild variant="outline" size="sm"><span className="gap-1"><Upload className="h-3 w-3" />Upload</span></Button></label>
                       <Button variant="ghost" size="icon" onClick={() => rmImage(i)} disabled={!!busy} className="text-destructive"><X className="h-4 w-4" /></Button>
                     </div>
                     );
@@ -390,8 +361,6 @@ export default function AdminProducts() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <ImageCleanupDialog open={cleanupOpen} onOpenChange={setCleanupOpen} onDone={load} />
     </div>
   );
 }
