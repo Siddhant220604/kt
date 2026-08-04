@@ -471,12 +471,11 @@ class AddressIn(BaseModel):
             raise ValueError('We only deliver within Uttar Pradesh. Please enter "Uttar Pradesh" as the state.')
         return v
 
-    @field_validator('pincode')
-    @classmethod
-    def validate_pincode(cls, v: str) -> str:
-        if v not in LUCKNOW_PINCODES:
-            raise ValueError('Sorry, we do not deliver to this pincode. We only deliver within Lucknow.')
-        return v
+    # No hand-maintained list of deliverable PIN codes here - the field only has to be a real
+    # 6-digit code. Whether we deliver there is decided by where the address actually is
+    # (calculate_delivery_charge: resolved city must be Lucknow and within the radius), which
+    # a static list could only ever approximate - and did so wrongly, rejecting genuine Lucknow
+    # codes that were never added to it.
 
 class OrderIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -1774,24 +1773,6 @@ GOOGLE_MAPS_TIMEOUT = 5
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
 DELIVERY_UNAVAILABLE_MESSAGE = 'Sorry, we currently only deliver within Lucknow. Please enter a Lucknow address to continue.'
 
-# The exact set of Lucknow-district PIN codes we deliver to. Anything not in this set is
-# non-deliverable and blocks order placement.
-LUCKNOW_PINCODES = {
-    # Core city (226001-226031; 226030 is unassigned)
-    "226001", "226002", "226003", "226004", "226005", "226006", "226007",
-    "226008", "226009", "226010", "226011", "226012", "226013", "226014",
-    "226015", "226016", "226017", "226018", "226019", "226020", "226021",
-    "226022", "226023", "226024", "226025", "226026", "226027", "226028",
-    "226029", "226031",
-    # Peripheral / tehsil belts
-    "226101", "226102", "226103", "226104",
-    "226201", "226202", "226203",
-    "226301", "226302", "226303",
-    "226401", "226501",
-    # Southern rural block (Mohanlalganj / Nigohan)
-    "227305", "227309",
-}
-
 # api.postalpincode.in intermittently resets connections (RemoteDisconnected) when hit with the
 # default requests User-Agent / without retries - a small retrying session with a browser-like
 # UA fixes most of those transient failures.
@@ -1874,10 +1855,8 @@ async def _verify_indian_pincode(pincode: str) -> Optional[Dict[str, Any]]:
     {'found': False} if the API confirms it doesn't, or None if the lookup itself failed (so
     callers can fail open rather than blocking on an unreachable third-party API).
 
-    Pincodes outside our deliverable Lucknow set are rejected locally without calling the
-    (occasionally flaky) external API at all, since we only ever deliver within that set."""
-    if pincode not in LUCKNOW_PINCODES:
-        return {'found': False}
+    The district this returns is what tells us whether the code is a Lucknow one - callers
+    compare it themselves rather than this checking against any fixed list of codes."""
     try:
         resp = await asyncio.to_thread(
             _pincode_session.get,

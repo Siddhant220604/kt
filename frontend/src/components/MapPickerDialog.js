@@ -18,7 +18,9 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
   const mapRef = useRef(null);
   const markerRef = useRef(null);
   const [pin, setPin] = useState(null);
-  const [nearby, setNearby] = useState('');
+  // What the reverse lookup found at the pin: { formatted_address, pincode, city }. Handed to
+  // the caller on confirm so the pin can fill in the address fields, not just the coordinates.
+  const [place, setPlace] = useState(null);
   const [outside, setOutside] = useState('');
   const [checking, setChecking] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -33,7 +35,7 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
   useEffect(() => {
     if (!pin) return;
     let cancelled = false;
-    setNearby('');
+    setPlace(null);
     setOutside('');
     // Anything past the delivery radius is refusable without asking Google at all, which also
     // covers pins in the middle of nowhere where the lookup finds no place to name.
@@ -46,7 +48,7 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
       api.get('/places/reverse', { params: { lat: pin.lat, lng: pin.lng } })
         .then(({ data }) => {
           if (cancelled) return;
-          setNearby(data.formatted_address || '');
+          setPlace(data);
           setOutside(data.deliverable === false ? (data.reason || OUTSIDE_MESSAGE) : '');
         })
         .catch(() => {})
@@ -98,7 +100,7 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
   useEffect(() => {
     if (!open) {
       mapRef.current = null; markerRef.current = null;
-      setPin(null); setNearby(''); setOutside(''); setChecking(false); setGeoError(''); setLocating(false);
+      setPin(null); setPlace(null); setOutside(''); setChecking(false); setGeoError(''); setLocating(false);
     }
   }, [open]);
 
@@ -197,7 +199,12 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
           {pin && <span className="text-muted-foreground">{pin.lat.toFixed(5)}, {pin.lng.toFixed(5)}</span>}
         </div>
         {geoError && <div className="text-xs text-amber-600">{geoError}</div>}
-        {nearby && !outside && <div className="text-xs text-muted-foreground">Pin is near: {nearby}</div>}
+        {place?.formatted_address && !outside && (
+          <div className="text-xs text-muted-foreground">
+            Pin is near: {place.formatted_address}
+            {place.pincode && <> · pincode {place.pincode}</>}
+          </div>
+        )}
         {outside && (
           <div className="text-sm text-red-600 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
             data-testid="map-picker-outside">
@@ -208,7 +215,7 @@ export default function MapPickerDialog({ open, onOpenChange, initial, onConfirm
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button type="button" disabled={!pin || !!error || !!outside || checking} data-testid="map-picker-confirm"
-            onClick={() => { onConfirm(pin, nearby); onOpenChange(false); }}>
+            onClick={() => { onConfirm(pin, place); onOpenChange(false); }}>
             {checking ? 'Checking…' : 'Confirm location'}
           </Button>
         </DialogFooter>

@@ -125,13 +125,20 @@ export default function AddressPicker({ value, onChange, verified, onVerifiedCha
         open={mapOpen}
         onOpenChange={setMapOpen}
         initial={hasPin ? { lat: value.lat, lng: value.lng } : null}
-        onConfirm={(pin, nearby) => {
+        onConfirm={(pin, place) => {
           // A dropped pin is a deliberate confirmation of where to deliver, so it counts as
           // verification on its own - including when the customer skipped the suggestions.
+          //
+          // The pin also knows its own PIN code, so take it from there rather than making the
+          // customer type it - the code that belongs to the spot they pointed at beats the one
+          // they remember. Only when the lookup actually returned one; a pin in a gap between
+          // named places doesn't get to blank out a code they already have.
+          const pincode = /^\d{6}$/.test(place?.pincode || '') ? place.pincode : value.pincode;
           onChange({
             lat: pin.lat,
             lng: pin.lng,
-            address_line1: line1.trim() || nearby || '',
+            address_line1: line1.trim() || place?.formatted_address || '',
+            pincode,
           });
           onVerifiedChange(true);
         }}
