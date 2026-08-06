@@ -72,7 +72,7 @@ export default function AdminProducts() {
 
   const visibleItems = data.items.filter(p => statusFilter === 'all' ? true : statusFilter === 'active' ? p.active : !p.active);
 
-  const resetImageState = () => { setImgBusy({}); setImgOriginals({}); };
+  const resetImageState = () => { setImgBusy({}); };
   const openNew = () => { resetImageState(); setEdit({ ...empty, category_id: cats[0]?.id || '' }); };
   const openEdit = (p) => { resetImageState(); setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specsList: Object.entries(p.specs || {}).map(([key, value]) => ({ key, value })), tags: p.tags || [], price_tiers: p.price_tiers || [], sale_price: p.sale_price || '', sale_starts_at: p.sale_starts_at || '', sale_ends_at: p.sale_ends_at || '' }); };
 
