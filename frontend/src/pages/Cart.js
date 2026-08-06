@@ -53,19 +53,20 @@ export default function Cart() {
         <div className="grid lg:grid-cols-[1fr,380px] gap-6">
           <div className="space-y-3">
             {items.map(it => (
-              <div key={it.product_id} className="bg-card border border-border rounded-2xl p-4 flex gap-3" data-testid={`cart-item-${it.product_id}`}>
+              <div key={it.key} className="bg-card border border-border rounded-2xl p-4 flex gap-3" data-testid={`cart-item-${it.product_id}`}>
                 <img src={it.image || 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=200&q=80'} alt={it.name} className="h-24 w-24 rounded-xl object-cover shrink-0" />
                 <div className="flex-1 min-w-0">
                   <Link to={`/products/${it.product_id}`} className="font-medium line-clamp-2 hover:text-primary">{it.name}</Link>
                   <div className="text-xs text-muted-foreground mt-1">{it.size} · per {it.unit} · MOQ: {it.moq}</div>
+                  {it.color && <div className="text-xs mt-0.5">Colour: <span className="font-medium">{it.color}</span></div>}
                   <div className="mt-2 flex items-center gap-3 flex-wrap">
                     <div className="flex items-center border border-border rounded-lg">
-                      <button onClick={() => updateQty(it.product_id, it.quantity - 1)} className="px-2.5 py-1.5 hover:bg-muted"><Minus className="h-3.5 w-3.5" /></button>
+                      <button onClick={() => updateQty(it.key, it.quantity - 1)} className="px-2.5 py-1.5 hover:bg-muted"><Minus className="h-3.5 w-3.5" /></button>
                       <span className="px-3 text-sm font-medium" data-testid={`cart-qty-${it.product_id}`}>{it.quantity}</span>
-                      <button onClick={() => updateQty(it.product_id, it.quantity + 1)} disabled={it.stock > 0 && it.quantity >= it.stock} className="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="h-3.5 w-3.5" /></button>
+                      <button onClick={() => updateQty(it.key, it.quantity + 1)} disabled={it.stock > 0 && it.quantity >= it.stock} className="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="h-3.5 w-3.5" /></button>
                     </div>
                     <div className="font-display font-bold">{formatINR(it.price * it.quantity)}</div>
-                    <button onClick={() => { removeItem(it.product_id); toast('Removed'); }} className="ml-auto text-destructive p-1.5 hover:bg-destructive/10 rounded" data-testid={`cart-remove-${it.product_id}`}><Trash2 className="h-4 w-4" /></button>
+                    <button onClick={() => { removeItem(it.key); toast('Removed'); }} className="ml-auto text-destructive p-1.5 hover:bg-destructive/10 rounded" data-testid={`cart-remove-${it.product_id}`}><Trash2 className="h-4 w-4" /></button>
                   </div>
                   {it.stock > 0 && it.quantity >= it.stock && <div className="text-xs text-amber-600 mt-1">Only {it.stock} in stock</div>}
                 </div>

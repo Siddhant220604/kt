@@ -13,8 +13,11 @@ import FramedImage from './FramedImage';
 const FALLBACK = 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=800&q=80';
 
 const ProductCard = ({ product }) => {
-  const { addItem, updateQty, removeItem, items } = useCart();
-  const cartItem = items.find(i => i.product_id === product.id);
+  const { addItem, updateQty, removeItem, items, lineKey } = useCart();
+  // A product sold in several colours can't be added from the grid - the colour has to be picked
+  // first - so the card sends the customer to the product page instead of a quick-add button.
+  const hasColors = (product.colors || []).length > 0;
+  const cartItem = hasColors ? null : items.find(i => i.key === lineKey(product.id));
   const { toggle, has } = useWishlist();
   const img = (product.images && product.images[0]) || FALLBACK;
   const inStock = (product.stock || 0) > 0;
@@ -54,18 +57,24 @@ const ProductCard = ({ product }) => {
             <div className="flex items-center border border-border rounded-lg" data-testid="product-card-qty-stepper">
               <button
                 onClick={() => {
-                  if (cartItem.quantity - 1 < (cartItem.moq || 1)) { removeItem(product.id); toast('Removed from cart'); }
-                  else updateQty(product.id, cartItem.quantity - 1);
+                  if (cartItem.quantity - 1 < (cartItem.moq || 1)) { removeItem(cartItem.key); toast('Removed from cart'); }
+                  else updateQty(cartItem.key, cartItem.quantity - 1);
                 }}
                 data-testid="product-card-qty-minus"
                 className="px-2.5 py-1.5 hover:bg-muted rounded-l-lg"><Minus className="h-3.5 w-3.5" /></button>
               <span className="px-2 text-sm font-medium min-w-[28px] text-center" data-testid="product-card-qty">{cartItem.quantity}</span>
               <button
-                onClick={() => updateQty(product.id, cartItem.quantity + 1)}
+                onClick={() => updateQty(cartItem.key, cartItem.quantity + 1)}
                 disabled={cartItem.stock > 0 && cartItem.quantity >= cartItem.stock}
                 data-testid="product-card-qty-plus"
                 className="px-2.5 py-1.5 hover:bg-muted rounded-r-lg disabled:opacity-40 disabled:cursor-not-allowed"><Plus className="h-3.5 w-3.5" /></button>
             </div>
+          ) : hasColors ? (
+            <Link to={`/products/${product.slug || product.id}`}>
+              <Button size="sm" variant="outline" data-testid="product-card-choose-color" disabled={!inStock}>
+                Choose colour
+              </Button>
+            </Link>
           ) : (
             <Button size="sm" data-testid="product-card-add-to-cart" disabled={!inStock}
               onClick={() => { addItem(product, product.moq || 1); toast.success('Added to cart'); }}>

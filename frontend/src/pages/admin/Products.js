@@ -13,7 +13,11 @@ import { Plus, Edit, Trash2, X, Image as ImageIcon, Search, Download, Upload, Fi
 import { toast } from 'sonner';
 import { processProductImage, MAX_INPUT_BYTES } from '../../lib/productImage';
 
-const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specsList: [], featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '', variant_group: '', variant_label: '' };
+const empty = { name: '', category_id: '', description: '', short_description: '', size: '', unit: 'piece', price: 0, compare_price: 0, moq: 1, stock: 0, images: [''], specsList: [], featured: false, active: true, tags: [], price_tiers: [], sale_price: '', sale_starts_at: '', sale_ends_at: '', variant_group: '', variant_label: '', colorsText: '' };
+
+// Colours are edited as one comma-separated line and stored as a list. Kept as raw text in the
+// form so a half-typed "Red, " doesn't collapse while the admin is still typing.
+const parseColors = (text) => (text || '').split(',').map(c => c.trim()).filter(Boolean);
 
 export default function AdminProducts() {
   const [data, setData] = useState({ items: [] });
@@ -74,7 +78,7 @@ export default function AdminProducts() {
 
   const resetImageState = () => { setImgBusy({}); };
   const openNew = () => { resetImageState(); setEdit({ ...empty, category_id: cats[0]?.id || '' }); };
-  const openEdit = (p) => { resetImageState(); setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specsList: Object.entries(p.specs || {}).map(([key, value]) => ({ key, value })), tags: p.tags || [], price_tiers: p.price_tiers || [], sale_price: p.sale_price || '', sale_starts_at: p.sale_starts_at || '', sale_ends_at: p.sale_ends_at || '' }); };
+  const openEdit = (p) => { resetImageState(); setEdit({ ...empty, ...p, images: p.images && p.images.length ? p.images : [''], specsList: Object.entries(p.specs || {}).map(([key, value]) => ({ key, value })), tags: p.tags || [], price_tiers: p.price_tiers || [], sale_price: p.sale_price || '', sale_starts_at: p.sale_starts_at || '', sale_ends_at: p.sale_ends_at || '', colorsText: (p.colors || []).join(', ') }); };
 
   // Deep-link support (e.g. from the dashboard's low-stock list): /admin/products?edit=<id>
   // opens straight into that product's edit dialog instead of requiring a manual search + click.
@@ -122,6 +126,7 @@ export default function AdminProducts() {
         sale_ends_at: edit.sale_ends_at || null,
         variant_group: edit.variant_group || '',
         variant_label: edit.variant_label || '',
+        colors: parseColors(edit.colorsText),
       };
       if (edit.id) { await api.put(`/products/${edit.id}`, payload); toast.success('Product updated'); }
       else { await api.post('/products', payload); toast.success('Product created'); }
@@ -242,7 +247,7 @@ export default function AdminProducts() {
                     <td className="py-2.5">{formatINR(p.price)}</td>
                     <td className="py-2.5">{p.stock}</td>
                     <td className="py-2.5">{p.moq}</td>
-                    <td className="py-2.5">{p.active ? <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/20">Active</Badge> : <Badge variant="outline">Draft</Badge>}{p.featured && <Badge className="ml-1 bg-[hsl(var(--brand-marigold))] text-black">Featured</Badge>}{p.sale_price && <Badge variant="outline" className="ml-1 bg-red-500/10 text-red-700 border-red-500/20">Flash sale set</Badge>}</td>
+                    <td className="py-2.5">{p.active ? <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/20">Active</Badge> : <Badge variant="outline">Draft</Badge>}{p.featured && <Badge className="ml-1 bg-[hsl(var(--brand-marigold))] text-black">Featured</Badge>}{p.sale_price && <Badge variant="outline" className="ml-1 bg-red-500/10 text-red-700 border-red-500/20">Flash sale set</Badge>}{p.colors?.length > 0 && <Badge variant="outline" className="ml-1">{p.colors.length} colours</Badge>}</td>
                     <td className="py-2.5"><div className="flex gap-1"><Button size="icon" variant="ghost" onClick={() => openEdit(p)} data-testid={`edit-product-${p.id}`}><Edit className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => del(p)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button></div></td>
                   </tr>
                 ))}
@@ -296,6 +301,17 @@ export default function AdminProducts() {
                   <div><Label className="text-xs text-muted-foreground">Variant Group</Label><Input value={edit.variant_group} onChange={(e) => setEdit({ ...edit, variant_group: e.target.value })} placeholder="e.g. eco-straws" /></div>
                   <div><Label className="text-xs text-muted-foreground">This Product's Size Label</Label><Input value={edit.variant_label} onChange={(e) => setEdit({ ...edit, variant_label: e.target.value })} placeholder="e.g. 6 mm" /></div>
                 </div>
+              </div>
+
+              <div>
+                <Label className="text-xs text-muted-foreground">Colours (optional)</Label>
+                <p className="text-xs text-muted-foreground mb-2">Comma separated, e.g. <span className="font-mono">Red, Blue, Golden</span>. The customer picks one on the product page and it travels with the order. All colours share this product's price and stock - use Size Variants above instead if the colours need separate prices.</p>
+                <Input value={edit.colorsText} onChange={(e) => setEdit({ ...edit, colorsText: e.target.value })} placeholder="Red, Blue, Golden" data-testid="admin-product-colors" />
+                {parseColors(edit.colorsText).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {parseColors(edit.colorsText).map((c, i) => <Badge key={i} variant="outline">{c}</Badge>)}
+                  </div>
+                )}
               </div>
 
               <div>

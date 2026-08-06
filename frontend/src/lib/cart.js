@@ -14,18 +14,29 @@ export const computeUnitPrice = (basePrice, tiers, qty) => {
   return price;
 };
 
+// A cart line is identified by product *and* chosen colour, not by product alone: the same
+// ribbon in Red and in Black are two separate lines a customer can order together, with their
+// own quantities. Colourless products keep a stable key of `<id>::`, so nothing else changes.
+export const lineKey = (product_id, color = '') => `${product_id}::${(color || '').trim().toLowerCase()}`;
+
 export const CartProvider = ({ children }) => {
   const [items, setItems] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch { return []; }
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || '[]');
+      // Carts saved before colours existed have no key/colour - stamp them so a returning
+      // customer's cart keeps working instead of quietly failing to update or remove.
+      return saved.map(i => ({ color: '', ...i, key: i.key || lineKey(i.product_id, i.color) }));
+    } catch { return []; }
   });
 
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(items));
   }, [items]);
 
-  const addItem = useCallback((product, qty = 1) => {
+  const addItem = useCallback((product, qty = 1, color = '') => {
     setItems(prev => {
-      const idx = prev.findIndex(i => i.product_id === product.id);
+      const key = lineKey(product.id, color);
+      const idx = prev.findIndex(i => i.key === key);
       const maxQ = product.stock > 0 ? product.stock : Infinity;
       const minQ = Math.max(qty, product.moq || 1);
       if (idx >= 0) {
@@ -43,7 +54,9 @@ export const CartProvider = ({ children }) => {
       }
       const q = Math.min(minQ, maxQ);
       return [...prev, {
+        key,
         product_id: product.id,
+        color,
         name: product.name,
         basePrice: product.price,
         price: computeUnitPrice(product.price, product.price_tiers, q),
@@ -58,23 +71,23 @@ export const CartProvider = ({ children }) => {
     });
   }, []);
 
-  const updateQty = useCallback((product_id, qty) => {
+  const updateQty = useCallback((key, qty) => {
     setItems(prev => prev.map(i => {
-      if (i.product_id !== product_id) return i;
+      if (i.key !== key) return i;
       const maxQ = i.stock > 0 ? i.stock : Infinity;
       const q = Math.min(Math.max(i.moq || 1, qty), maxQ);
       return { ...i, quantity: q, price: computeUnitPrice(i.basePrice ?? i.price, i.price_tiers, q) };
     }));
   }, []);
 
-  const removeItem = useCallback((product_id) => setItems(prev => prev.filter(i => i.product_id !== product_id)), []);
+  const removeItem = useCallback((key) => setItems(prev => prev.filter(i => i.key !== key)), []);
   const clear = useCallback(() => setItems([]), []);
 
   const subtotal = useMemo(() => items.reduce((s, i) => s + i.price * i.quantity, 0), [items]);
   const count = useMemo(() => items.reduce((s, i) => s + i.quantity, 0), [items]);
 
   return (
-    <CartContext.Provider value={{ items, addItem, updateQty, removeItem, clear, subtotal, count }}>
+    <CartContext.Provider value={{ items, addItem, updateQty, removeItem, clear, subtotal, count, lineKey }}>
       {children}
     </CartContext.Provider>
   );

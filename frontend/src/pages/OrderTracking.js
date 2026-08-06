@@ -166,7 +166,7 @@ export default function OrderTracking() {
               <div className="space-y-2 text-sm">
                 {order.items.map((it, i) => (
                   <div key={i} className="flex justify-between">
-                    <div>{it.name} × {it.quantity}</div>
+                    <div>{it.name}{it.color ? ` (${it.color})` : ''} × {it.quantity}</div>
                     <div>{formatINR(it.total)}</div>
                   </div>
                 ))}

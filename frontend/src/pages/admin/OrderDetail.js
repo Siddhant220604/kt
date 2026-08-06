@@ -133,6 +133,7 @@ export default function AdminOrderDetail() {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium">{it.name}</div>
                     <div className="text-xs text-muted-foreground">{it.size} • {it.quantity} × {formatINR(it.price)}</div>
+                    {it.color && <div className="text-xs font-medium text-foreground">Colour: {it.color}</div>}
                   </div>
                   <div className="font-medium">{formatINR(it.total)}</div>
                 </div>

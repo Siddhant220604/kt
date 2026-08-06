@@ -387,6 +387,11 @@ class ProductIn(BaseModel):
     # shown on the selector button for this particular product.
     variant_group: Optional[str] = Field('', max_length=100)
     variant_label: Optional[str] = Field('', max_length=50)
+    # Colour choices offered on this one product (e.g. ribbons, envelopes), as opposed to
+    # variant_group, which links separate products. Every colour shares this product's price and
+    # stock - the customer's pick just rides along on the cart/order line so packing knows which
+    # one to put in the box. Empty list = no colour choice, the product is sold as-is.
+    colors: List[str] = Field(default_factory=list, max_length=50)
     price: float = Field(gt=0, le=10_000_000)
     compare_price: Optional[float] = Field(0, ge=0, le=10_000_000)
     moq: int = Field(1, ge=1, le=100000)
@@ -429,6 +434,26 @@ class ProductIn(BaseModel):
                 raise ValueError('Each tag must be 1-50 characters')
         return tags
 
+    @field_validator('colors')
+    @classmethod
+    def validate_colors(cls, colors: List[str]) -> List[str]:
+        # Deduped case-insensitively because the order line matches the customer's pick against
+        # this list the same way - two entries differing only in case would make the match
+        # ambiguous, and the storefront would show what looks like the same swatch twice.
+        cleaned: List[str] = []
+        seen = set()
+        for c in colors:
+            c = c.strip()
+            if not c:
+                continue
+            if len(c) > 50:
+                raise ValueError('Each colour must be 50 characters or less')
+            if c.lower() in seen:
+                continue
+            seen.add(c.lower())
+            cleaned.append(c)
+        return cleaned
+
 class CartItem(BaseModel):
     model_config = ConfigDict(extra='forbid')
     product_id: str = Field(min_length=1, max_length=100)
@@ -439,6 +464,9 @@ class CartItem(BaseModel):
     unit: Optional[str] = Field('piece', max_length=30)
     quantity: int = Field(gt=0, le=100000)
     moq: int = Field(1, ge=1, le=100000)
+    # Which of the product's offered colours this line is for. Checked against the product's own
+    # list in create_order rather than trusted, since it decides what gets packed.
+    color: Optional[str] = Field('', max_length=50)
 
 class AddressIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -1125,7 +1153,7 @@ async def list_products(
         docs = [apply_flash_sale(d) for d in docs]
     return {'items': docs, 'total': total, 'page': page, 'limit': limit, 'pages': max(1, (total + limit - 1) // limit)}
 
-PRODUCT_CSV_COLUMNS = ['id', 'name', 'category', 'description', 'short_description', 'size', 'unit', 'variant_group', 'variant_label', 'price', 'compare_price', 'moq', 'stock', 'images', 'tags', 'featured', 'active']
+PRODUCT_CSV_COLUMNS = ['id', 'name', 'category', 'description', 'short_description', 'size', 'unit', 'variant_group', 'variant_label', 'colors', 'price', 'compare_price', 'moq', 'stock', 'images', 'tags', 'featured', 'active']
 MAX_IMPORT_ROWS = 2000
 
 # Registered ahead of the /products/{pid} route below - both are literal path segments, not
@@ -1142,7 +1170,7 @@ async def export_products(_: Dict = Depends(require_admin)):
         writer.writerow([security.csv_safe(v) for v in [
             d.get('id', ''), d.get('name', ''), cats.get(d.get('category_id'), ''),
             d.get('description', ''), d.get('short_description', ''), d.get('size', ''), d.get('unit', ''),
-            d.get('variant_group', ''), d.get('variant_label', ''),
+            d.get('variant_group', ''), d.get('variant_label', ''), ';'.join(d.get('colors') or []),
             d.get('price', 0), d.get('compare_price', 0), d.get('moq', 1), d.get('stock', 0),
             ';'.join(d.get('images') or []), ';'.join(d.get('tags') or []),
             d.get('featured', False), d.get('active', True),
@@ -1156,7 +1184,7 @@ async def product_import_template(_: Dict = Depends(require_admin)):
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(PRODUCT_CSV_COLUMNS)
-    writer.writerow(['', 'Sample Product', 'Packaging', 'Full description here', 'Short blurb', '500g', 'piece', '', '', '99', '129', '1', '100', 'https://example.com/img1.jpg;https://example.com/img2.jpg', 'eco;bulk', 'false', 'true'])
+    writer.writerow(['', 'Sample Product', 'Packaging', 'Full description here', 'Short blurb', '500g', 'piece', '', '', 'Red;Blue;Golden', '99', '129', '1', '100', 'https://example.com/img1.jpg;https://example.com/img2.jpg', 'eco;bulk', 'false', 'true'])
     return Response(content=buf.getvalue(), media_type='text/csv', headers={
         'Content-Disposition': 'attachment; filename=products-import-template.csv'
     })
@@ -1288,6 +1316,7 @@ async def import_products(request: Request, payload: Dict = Depends(require_admi
                 unit=row.get('unit') or 'piece',
                 variant_group=row.get('variant_group') or '',
                 variant_label=row.get('variant_label') or '',
+                colors=[c.strip() for c in (row.get('colors') or '').split(';') if c.strip()],
                 price=float(row.get('price') or 0),
                 compare_price=float(row.get('compare_price') or 0),
                 moq=int(float(row.get('moq') or 1)),
@@ -1618,8 +1647,38 @@ _recent_order_fingerprints: Dict[str, datetime] = {}
 DUPLICATE_ORDER_WINDOW_SECONDS = 15
 
 
+def resolve_item_color(product: Dict, requested: Optional[str]) -> str:
+    """Pins a cart line to one of the product's offered colours.
+
+    Matching ignores case and surrounding spaces, but what gets stored is the admin's own
+    spelling, so the invoice and the picking slip read exactly like the catalog does.
+    """
+    choices = product.get('colors') or []
+    picked = (requested or '').strip()
+    if not choices:
+        # Nothing to choose from - drop whatever the client sent rather than recording a colour
+        # this product does not actually come in.
+        return ''
+    if not picked:
+        raise HTTPException(status_code=400, detail=f'Please choose a colour for {product["name"]}')
+    for c in choices:
+        if c.strip().lower() == picked.lower():
+            return c
+    raise HTTPException(status_code=400, detail=f'"{picked}" is not an available colour for {product["name"]}')
+
+
+def item_display_name(item: Dict) -> str:
+    """Order-line label with the chosen colour appended, for anywhere a human reads the line -
+    invoice, CSV export, WhatsApp. Products without colours are unaffected."""
+    name = item.get('name', '')
+    color = (item.get('color') or '').strip()
+    return f'{name} ({color})' if color else name
+
+
 def _order_fingerprint(order: 'OrderIn') -> str:
-    items_key = sorted((it.product_id, it.quantity) for it in order.items)
+    # Colour is part of the key: the same product in two colours is two genuine lines, and an
+    # order for both must not look like the same line submitted twice.
+    items_key = sorted((it.product_id, (it.color or '').strip().lower(), it.quantity) for it in order.items)
     raw = f"{order.address.mobile}|{items_key}|{order.payment_method}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -2234,6 +2293,7 @@ async def create_order(order: OrderIn, background_tasks: BackgroundTasks, reques
             'price': unit_price,
             'size': p.get('size', ''),
             'unit': p.get('unit', 'piece'),
+            'color': resolve_item_color(p, it.color),
             'image': (p.get('images') or [''])[0],
             'quantity': it.quantity,
             'total': round(unit_price * it.quantity, 2),
@@ -2752,7 +2812,7 @@ async def export_orders(
                       'Items', 'Subtotal', 'Discount', 'Tax', 'Shipping', 'Total', 'Payment Method', 'Payment Status'])
     for o in docs:
         addr = o.get('address', {})
-        items_summary = '; '.join(f"{it.get('name', '')} x{it.get('quantity', 0)}" for it in o.get('items', []))
+        items_summary = '; '.join(f"{item_display_name(it)} x{it.get('quantity', 0)}" for it in o.get('items', []))
         writer.writerow([security.csv_safe(v) for v in [
             o.get('id', ''), o.get('created_at', '')[:10], o.get('status', ''),
             addr.get('name', ''), addr.get('mobile', ''), addr.get('email', ''),
@@ -2907,7 +2967,13 @@ async def request_return(oid: str, req: ReturnRequestIn, request: Request, paylo
             raise
         except Exception:
             pass
-    order_items = {it['product_id']: it for it in o.get('items', [])}
+    # A product can occupy several lines of one order (one per colour ordered), so the returnable
+    # quantity is the sum across those lines - keying by product_id alone would silently check the
+    # request against whichever line came last and reject a legitimate return of the rest.
+    order_items: Dict[str, Dict] = {}
+    for it in o.get('items', []):
+        agg = order_items.setdefault(it['product_id'], {'name': it['name'], 'quantity': 0})
+        agg['quantity'] += it.get('quantity', 0)
     return_items = []
     for ri in req.items:
         oi = order_items.get(ri.product_id)
@@ -4160,7 +4226,7 @@ def build_invoice_pdf(order: Dict, settings: Dict) -> bytes:
     for i, item in enumerate(order.get('items', []), 1):
         amt = item.get('total', 0)
         rs, p = rp(amt)
-        item_rows.append([str(i), item.get('name', ''), item.get('hsn_code', ''), item.get('uom', 'UNIT'),
+        item_rows.append([str(i), item_display_name(item), item.get('hsn_code', ''), item.get('uom', 'UNIT'),
                            str(item.get('quantity', 0)), f"{item.get('price', 0):.2f}", rs, p])
         total_taxable += amt
 

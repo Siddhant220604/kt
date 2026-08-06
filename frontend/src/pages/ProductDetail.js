@@ -35,6 +35,9 @@ export default function ProductDetail() {
   const [questionForm, setQuestionForm] = useState({ name: '', question: '' });
   const [submittingQuestion, setSubmittingQuestion] = useState(false);
   const [bundleSelected, setBundleSelected] = useState({});
+  // Deliberately starts unset even when the product has colours: pre-picking one would let a
+  // customer order a colour they never actually looked at.
+  const [color, setColor] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -42,6 +45,7 @@ export default function ProductDetail() {
       const { data } = await api.get(`/products/${idOrSlug}`);
       setProduct(data);
       setQty(data.moq || 1);
+      setColor('');
       const initSel = { [data.id]: true };
       (data.frequently_bought_together || []).forEach(p => { initSel[p.id] = true; });
       setBundleSelected(initSel);
@@ -77,6 +81,10 @@ export default function ProductDetail() {
   const changeQty = (delta) => setQty(q => Math.min(Math.max(product.moq || 1, q + delta), maxQty));
   const unitPrice = computeUnitPrice(product.price, product.price_tiers, qty);
   const hasTiers = product.price_tiers && product.price_tiers.length > 0;
+  const colors = product.colors || [];
+  // Every colour shares one stock pool, so the only thing a colour blocks is checking out
+  // without having chosen one.
+  const needsColor = colors.length > 0 && !color;
 
   const wa = `https://wa.me/${settings.whatsapp || '919044057739'}?text=${encodeURIComponent(`Hi Kiran Traders, I want to enquire bulk price for: ${product.name} (${product.size || ''}). Quantity needed: `)}`;
 
@@ -105,12 +113,15 @@ export default function ProductDetail() {
     } : {}),
   };
 
-  const bundleItems = [product, ...(product.frequently_bought_together || [])];
+  // Suggested items that come in several colours are left out of the bundle: one click can't
+  // stand in for a colour choice, and adding them in an arbitrary colour is worse than not
+  // offering them here. The product being viewed stays, since its own picker is right above.
+  const bundleItems = [product, ...(product.frequently_bought_together || []).filter(p => !(p.colors || []).length)];
   const toggleBundleItem = (id) => setBundleSelected(s => ({ ...s, [id]: !s[id] }));
   const bundleTotal = bundleItems.filter(p => bundleSelected[p.id]).reduce((sum, p) => sum + computeUnitPrice(p.price, p.price_tiers, p.moq || 1) * (p.moq || 1), 0);
   const addBundleToCart = () => {
     const selected = bundleItems.filter(p => bundleSelected[p.id]);
-    selected.forEach(p => addItem(p, p.moq || 1));
+    selected.forEach(p => addItem(p, p.moq || 1, p.id === product.id ? color : ''));
     toast.success(`${selected.length} item(s) added to cart`);
   };
 
@@ -209,6 +220,28 @@ export default function ProductDetail() {
                 </div>
               )}
 
+              {colors.length > 0 && (
+                <div className="mt-4" data-testid="color-picker">
+                  <div className="text-xs text-muted-foreground mb-1.5">
+                    Colour: <span className="font-medium text-foreground">{color || 'please select'}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {colors.map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setColor(c)}
+                        data-testid={`color-${c}`}
+                        aria-pressed={color === c}
+                        className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${color === c ? 'border-primary ring-1 ring-primary bg-primary/5 font-medium' : 'border-border hover:border-primary/60'}`}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {hasTiers && (
                 <div className="mt-3 bg-muted/40 border border-border rounded-xl p-3 text-sm">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Bulk Pricing</div>
@@ -238,13 +271,14 @@ export default function ProductDetail() {
               </div>
 
               {/* Actions */}
+              {needsColor && <div className="mt-4 text-sm text-amber-600" data-testid="color-required-hint">Please select a colour to continue.</div>}
               <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Button size="lg" disabled={!inStock} data-testid="detail-add-to-cart"
-                  onClick={() => { addItem(product, qty); toast.success('Added to cart'); }}>
+                <Button size="lg" disabled={!inStock || needsColor} data-testid="detail-add-to-cart"
+                  onClick={() => { addItem(product, qty, color); toast.success(color ? `Added to cart (${color})` : 'Added to cart'); }}>
                   <ShoppingCart className="h-4 w-4 mr-2" />Add to Cart
                 </Button>
-                <Button size="lg" variant="default" disabled={!inStock} data-testid="detail-buy-now"
-                  onClick={() => { addItem(product, qty); navigate('/checkout'); }} className="bg-[hsl(var(--brand-terracotta))]">
+                <Button size="lg" variant="default" disabled={!inStock || needsColor} data-testid="detail-buy-now"
+                  onClick={() => { addItem(product, qty, color); navigate('/checkout'); }} className="bg-[hsl(var(--brand-terracotta))]">
                   Buy Now
                 </Button>
               </div>
@@ -376,7 +410,7 @@ export default function ProductDetail() {
                 </div>
                 <div className="mt-4 flex items-center justify-between flex-wrap gap-3 pt-3 border-t border-border">
                   <div className="text-sm">Total for selected: <span className="font-display font-bold text-lg">{formatINR(bundleTotal)}</span></div>
-                  <Button onClick={addBundleToCart} className="gap-2" data-testid="add-bundle-to-cart"><ShoppingCart className="h-4 w-4" />Add Selected to Cart</Button>
+                  <Button onClick={addBundleToCart} disabled={needsColor && !!bundleSelected[product.id]} className="gap-2" data-testid="add-bundle-to-cart"><ShoppingCart className="h-4 w-4" />Add Selected to Cart</Button>
                 </div>
               </div>
             </div>

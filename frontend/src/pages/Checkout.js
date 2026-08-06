@@ -225,7 +225,7 @@ export default function Checkout() {
       const payload = {
         items: items.map(i => ({
           product_id: i.product_id, name: i.name, price: i.price, size: i.size, unit: i.unit,
-          image: i.image, quantity: i.quantity, moq: i.moq,
+          image: i.image, quantity: i.quantity, moq: i.moq, color: i.color || '',
         })),
         address: { name: form.name, mobile: form.mobile, email: form.email, address_line1: form.address_line1, address_line2: form.address_line2, city: form.city, state: form.state, pincode: form.pincode, landmark: form.landmark, gst_number: form.gst_number, lat: form.lat ?? null, lng: form.lng ?? null },
         payment_method: payment,
@@ -416,10 +416,10 @@ export default function Checkout() {
               <div className="font-display font-semibold mb-4">Order Summary</div>
               <div className="space-y-2 max-h-64 overflow-auto text-sm mb-3">
                 {items.map(it => (
-                  <div key={it.product_id} className="flex gap-2">
+                  <div key={it.key} className="flex gap-2">
                     <img src={it.image || 'https://images.unsplash.com/photo-1606636661692-255650f47ec9?w=100&q=80'} alt="" className="h-12 w-12 rounded-lg object-cover" />
                     <div className="flex-1 min-w-0">
-                      <div className="line-clamp-1 text-xs">{it.name}</div>
+                      <div className="line-clamp-1 text-xs">{it.name}{it.color ? ` · ${it.color}` : ''}</div>
                       <div className="text-[10px] text-muted-foreground">{it.quantity} × {formatINR(it.price)}</div>
                     </div>
                     <div className="text-xs font-medium">{formatINR(it.price * it.quantity)}</div>
